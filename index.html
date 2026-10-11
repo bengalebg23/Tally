@@ -60,6 +60,9 @@
   Hand, #F7F8FA ground, white cards, #2F6FE4 accent).
 
   CHANGELOG
+  v1.9.0 — Month-by-month bar chart gets its own period chips: 6 / 12 / 24
+           months rolling or any calendar year (ui.mwin, monthWindow()).
+           Works in single and overlay views; bars still drill into months.
   v1.8.3 — start_url + id "./?app=3": a different start URL gives Chrome a new
            WebAPK package name, sidestepping the stuck/hidden old install.
   v1.8.2 — New manifest id ("./?app=tally-2") so Chrome offers a fresh install
@@ -133,7 +136,7 @@
 <link rel="manifest" href="manifest.webmanifest?v=3">
 <link rel="icon" type="image/png" href="icon-192.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
-<title>Tally v1.8.3</title>
+<title>Tally v1.9.0</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Patrick+Hand&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -358,7 +361,7 @@
   <div class="title-row">
     <h1 class="title">Tally</h1>
     <div class="title-right">
-      <span class="version-badge">v1.8.3</span>
+      <span class="version-badge">v1.9.0</span>
       <button class="icon-btn" id="themeBtn" aria-label="Switch light or dark theme"></button>
       <button class="icon-btn" id="openSettings" aria-label="Settings">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
@@ -378,7 +381,7 @@
 
 <script>
 'use strict';
-const VERSION = '1.8.3';
+const VERSION = '1.9.0';
 const STORE_KEY = 'tally.v1';
 const UI_KEY = 'tally.ui';
 const SESSION_WINDOW = 15 * 60000;
@@ -420,7 +423,7 @@ function fixCounter(c){
 }
 function loadUI(){ try{ return JSON.parse(localStorage.getItem(UI_KEY)) || {}; }catch(e){ return {}; } }
 // UI state is not encrypted, so it never stores tag names
-function saveUI(){ try{ localStorage.setItem(UI_KEY, JSON.stringify({tab:ui.tab, cg:ui.cg, crange:ui.crange, mixRange:ui.mixRange, lg:ui.lg, chartOrder:ui.chartOrder||null, period:ui.period||null})); }catch(e){} }
+function saveUI(){ try{ localStorage.setItem(UI_KEY, JSON.stringify({tab:ui.tab, cg:ui.cg, crange:ui.crange, mixRange:ui.mixRange, lg:ui.lg, chartOrder:ui.chartOrder||null, period:ui.period||null, mwin:ui.mwin||null})); }catch(e){} }
 
 /* ───────── crypto ───────── */
 const te = new TextEncoder(), td = new TextDecoder();
@@ -1101,9 +1104,11 @@ function renderCharts(){
     ${svgLine(keys, [{vals:perMonth, color, dots:true, op:.85}, {vals:avg3, color:'var(--paper)', dash:true, w:1.4, op:.7}], 200, keys.map((k,i) => perMonth[i] ? 'm:'+k : null))}
     <div class="legend"><span><i style="--c:${color}"></i>${what}</span><span><i class="dash" style="--c:var(--paper)"></i>3-month average</span></div>
   </section>`;
+  const mw = monthWindow(ss), mwVals = mw.keys.map(k => counts.get(k) || 0), mwSum = mwVals.reduce((a,b) => a+b, 0), mwN = mw.keys.filter(k => k <= nowK).length || 1;
   blocks.last12 = `<section class="card">
-    <div class="card-h"><h2>Last 12 months</h2><span class="sub">${(sum12/12).toFixed(1)} a month</span></div>
-    ${svgBars(last12k.map(k => MON[k%12][0]), last12, color, 170, 11, last12k.map(k => 'm:'+k))}
+    <div class="card-h"><h2>${esc(mw.title)}</h2><span class="sub">${mwSum} · ${(mwSum/mwN).toFixed(1)} a month</span></div>
+    ${monthWindowChips(ss)}
+    ${svgBars(mw.keys.map(k => MON[k%12][0]), mwVals, color, 170, mw.keys.indexOf(nowK), mw.keys.map(k => 'm:'+k))}
   </section>`;
   blocks.year = yearCard(ss, color);
   blocks.dow = `<section class="card">
@@ -1128,6 +1133,22 @@ function finishCharts(html, blocks){
   html = html.replace('Hold a chart to move it', 'Tap a bar or point to see the sessions behind it · hold a chart to move it');
   view.innerHTML = html;
   makeSortable(document.getElementById('sortCharts'), keys => { ui.chartOrder = keys; saveUI(); setTimeout(render, 0); });
+}
+// Month-by-month bar chart window: rolling 6/12/24 months or a calendar year (ui.mwin)
+function monthWindowOpts(ss){
+  const ys = [...new Set(ss.map(s => new Date(s.t).getFullYear()))].sort((a,b) => b-a);
+  return [{id:'6m', chip:'6 mo', n:6, title:'Last 6 months'}, {id:'12m', chip:'12 mo', n:12, title:'Last 12 months'}, {id:'24m', chip:'24 mo', n:24, title:'Last 24 months'}]
+    .concat(ys.map(y => ({id:'y'+y, chip:String(y), year:y, title:String(y)})));
+}
+function monthWindow(ss){
+  const opts = monthWindowOpts(ss), o = opts.find(x => x.id === ui.mwin) || opts[1], nowK = monthKey(Date.now()), keys = [];
+  if(o.year != null) for(let m = 0; m < 12; m++) keys.push(o.year*12 + m);
+  else for(let k = nowK - o.n + 1; k <= nowK; k++) keys.push(k);
+  return {keys, title:o.title, id:o.id};
+}
+function monthWindowChips(ss){
+  const cur = monthWindow(ss).id;
+  return `<div class="chips per" data-ck="mwin" style="margin:-2px 0 6px">${monthWindowOpts(ss).map(o => `<button class="chip ${o.id===cur?'on':''}" data-act="mwin" data-v="${o.id}">${o.chip}</button>`).join('')}</div>`;
 }
 const SERIES = ['#2F6FE4','#F0703C','#1baf7a','#4a3aa7'];
 function svgGBars(labels, series, h=170, drill=null){
@@ -1180,9 +1201,11 @@ function overlayBlocks(g, tags, tcol){
     ${svgLine(keys, series, 210, keys.map(k => 'm:'+k))}
     ${legendFor(S)}${smooth ? '<p class="help" style="margin:4px 0 0">Lines show a 3-month average so they\'re easier to compare.</p>' : ''}
   </section>`;
+  const mw = monthWindow(union);
   blocks.last12 = `<section class="card">
-    <div class="card-h"><h2>Last 12 months</h2></div>
-    ${svgGBars(last12k.map(k => MON[k%12][0]), S.map(x => ({vals: last12k.map(k => x.counts.get(k)||0), color:x.color})), 170, last12k.map(k => 'm:'+k))}
+    <div class="card-h"><h2>${esc(mw.title)}</h2></div>
+    ${monthWindowChips(union)}
+    ${svgGBars(mw.keys.map(k => MON[k%12][0]), S.map(x => ({vals: mw.keys.map(k => x.counts.get(k)||0), color:x.color})), 170, mw.keys.map(k => 'm:'+k))}
     ${legendFor(S)}
   </section>`;
   const ys = [...new Set(union.map(s => new Date(s.t).getFullYear()))].sort();
@@ -1704,6 +1727,7 @@ view.addEventListener('click', ev => {
     else { if(ui.ctags.length >= 4){ toast('Up to 4 tags at once'); return; } ui.ctags = ui.ctags.concat(t); }
     later();
   }
+  else if(a === 'mwin'){ ui.mwin = b.dataset.v; saveUI(); later(); }
   else if(a === 'ovsmooth'){ ui.ovSmooth = b.dataset.v === '1'; later(); }
   else if(a === 'crange'){ ui.crange = b.dataset.v; later(); }
   else if(a === 'mix'){ ui.mixRange = b.dataset.v; later(); }
