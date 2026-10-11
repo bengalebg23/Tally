@@ -60,6 +60,9 @@
   Hand, #F7F8FA ground, white cards, #2F6FE4 accent).
 
   CHANGELOG
+  v1.6.3 — Filter chip rows wrap instead of side-scrolling; clampChips() keeps
+           each row (data-ck) to two lines with a "+N more" / "Less" chip.
+           Shorter period chip labels (3 mo / 6 mo / 12 mo / All).
   v1.6.2 — group.noAll hides the "All sessions" chart view (on by default for
            the Masterbate group, as porn-only sessions made the total
            meaningless); charts then default to the group's counter tag.
@@ -108,7 +111,7 @@
 <meta name="theme-color" content="#F7F8FA">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Tally">
-<title>Tally v1.6.2</title>
+<title>Tally v1.6.3</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Patrick+Hand&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -166,9 +169,7 @@
   .empty{padding:26px 16px; text-align:center; color:var(--paper-dim); font-size:14px; display:grid; gap:12px; justify-items:center;}
 
   /* chips */
-  .chips{display:flex; gap:6px; overflow-x:auto; padding-bottom:2px; scrollbar-width:none;}
-  .chips::-webkit-scrollbar{display:none;}
-  .chips.wrap{flex-wrap:wrap; overflow:visible;}
+  .chips{display:flex; flex-wrap:wrap; gap:6px;}
   .chip{flex:none; font:600 12.5px 'Inter',sans-serif; padding:6px 11px; border-radius:20px; border:1px solid var(--line); background:var(--surface); color:var(--paper-dim); cursor:pointer; display:inline-flex; align-items:center; gap:6px;}
   .chip i{width:8px; height:8px; border-radius:50%; background:var(--c);}
   .chip.on{background:var(--paper); border-color:var(--paper); color:#fff;}
@@ -238,7 +239,8 @@
   .hbar.tap:active{background:var(--surface-2);}
   .sheet .stats{grid-template-columns:repeat(2,minmax(0,1fr));}
   .per-wrap .lbl{margin-left:2px;}
-  .chips.per .chip{font-size:12px; padding:5px 10px;}
+  .chips.per .chip, .chips[data-ck] .chip{font-size:12px; padding:5px 10px;}
+  .chip.more{border-style:dashed; color:var(--mustard);}
   .norm{display:grid; gap:5px; margin:4px 0 2px; padding:9px 10px 8px; background:var(--surface-2); border-radius:10px;}
   .norm-line{font-size:13px; color:var(--paper-dim); line-height:1.35;}
   .norm-line b{color:var(--paper);}
@@ -307,7 +309,7 @@
   <div class="title-row">
     <h1 class="title">Tally</h1>
     <div class="title-right">
-      <span class="version-badge">v1.6.2</span>
+      <span class="version-badge">v1.6.3</span>
       <button class="icon-btn" id="openSettings" aria-label="Settings">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       </button>
@@ -326,7 +328,7 @@
 
 <script>
 'use strict';
-const VERSION = '1.6.2';
+const VERSION = '1.6.3';
 const STORE_KEY = 'tally.v1';
 const UI_KEY = 'tally.ui';
 const SESSION_WINDOW = 15 * 60000;
@@ -655,7 +657,33 @@ function render(){
   else if(ui.tab === 'now') renderNow();
   else if(ui.tab === 'charts') renderCharts();
   else renderLog();
+  clampChips(view);
   saveUI();
+}
+// Keep each filter row to two lines: overflow folds into a "+N more" chip (the selected chip always stays visible).
+const chipOpen = new Set();
+function clampChips(root){
+  root.querySelectorAll('.chips[data-ck]').forEach(el => {
+    const key = el.dataset.ck;
+    el.querySelectorAll('.chip.more').forEach(x => x.remove());
+    const kids = [...el.children]; kids.forEach(k => k.hidden = false);
+    const tops = [...new Set(kids.map(k => k.offsetTop))].sort((a,b) => a-b);
+    if(tops.length <= 2) return;
+    if(chipOpen.has(key)){ el.insertAdjacentHTML('beforeend', `<button class="chip more" data-act="chipless" data-ck="${key}">Less ▴</button>`); return; }
+    const line2 = tops[1];
+    kids.forEach(k => { if(k.offsetTop > line2) k.hidden = true; });
+    const sel = kids.find(k => k.classList.contains('on'));
+    const more = document.createElement('button'); more.className = 'chip more'; more.dataset.act = 'chipmore'; more.dataset.ck = key; el.append(more);
+    for(let guard = 0; guard < 60; guard++){
+      const hidden = kids.filter(k => k.hidden);
+      if(sel && sel.hidden){ sel.hidden = false; }
+      more.textContent = `+${kids.filter(k => k.hidden).length} more`;
+      const over = kids.filter(k => !k.hidden && k.offsetTop > line2);
+      if(more.offsetTop <= line2 && !over.length) break;
+      const victim = kids.filter(k => !k.hidden && k !== sel).pop(); if(!victim) break;
+      victim.hidden = true;
+    }
+  });
 }
 function emptyState(){
   return `<div class="card empty">
@@ -672,12 +700,12 @@ function periodList(){
   const mStart = ym => { const [y,m] = ym.split('-').map(Number); return new Date(y, m-1, 1).getTime(); };
   const mEnd = ym => { const [y,m] = ym.split('-').map(Number); return new Date(y, m, 1).getTime(); };
   return [
-    {id:'3m',  name:'Last 3 months',  short:'3 months',  from: now - 91*DAY},
-    {id:'6m',  name:'Last 6 months',  short:'6 months',  from: now - 182*DAY},
-    {id:'12m', name:'Last 12 months', short:'12 months', from: now - 365*DAY},
+    {id:'3m',  name:'Last 3 months',  short:'3 months',  chip:'3 mo',  from: now - 91*DAY},
+    {id:'6m',  name:'Last 6 months',  short:'6 months',  chip:'6 mo',  from: now - 182*DAY},
+    {id:'12m', name:'Last 12 months', short:'12 months', chip:'12 mo', from: now - 365*DAY},
     ...db.periods.map(p => ({id:p.id, name:p.name, short:p.name, from:mStart(p.from), to:p.to ? mEnd(p.to) : null, custom:true})),
     ...ys.map(y => ({id:'y'+y, name:String(y), short:String(y), from:new Date(y,0,1).getTime(), to:new Date(y+1,0,1).getTime()})),
-    {id:'all', name:'All time', short:'all time', from:0}
+    {id:'all', name:'All time', short:'all time', chip:'All', from:0}
   ];
 }
 function curPeriod(){ const l = periodList(); return l.find(p => p.id === ui.period) || l.find(p => p.id === '12m'); }
@@ -713,7 +741,7 @@ function normBlock(ssAsc, color, cur){
 }
 function periodChips(){
   const cur = curPeriod();
-  return `<div class="chips per">${periodList().map(p => `<button class="chip ${p.id===cur.id?'on':''}" data-act="period" data-p="${p.id}">${esc(p.name)}</button>`).join('')}<button class="chip add" data-act="newPeriod">+ period</button></div>`;
+  return `<div class="chips per" data-ck="per">${periodList().map(p => `<button class="chip ${p.id===cur.id?'on':''}" data-act="period" data-p="${p.id}">${esc(p.chip || p.name)}</button>`).join('')}<button class="chip add" data-act="newPeriod">+ period</button></div>`;
 }
 function periodSheet(){
   openSheet(`<div class="sheet-head"><h3>Custom period</h3><button class="x" data-close aria-label="Close">✕</button></div>
@@ -964,8 +992,8 @@ function renderCharts(){
   }
   const tagList = g.tags.slice().sort((a,b) => (tc.get(b)||0) - (tc.get(a)||0));
   const color = g.color;
-  let html = `<div class="chips">${db.groups.map(x => `<button class="chip ${x.id===g.id?'on':''}" style="--c:${x.color}" data-act="cg" data-g="${x.id}"><i></i>${esc(x.name)}</button>`).join('')}</div>
-    <div class="chips">${g.noAll ? '' : `<button class="chip tag ${!ui.ctag?'on':''}" style="--c:${color}" data-act="ctag" data-tag="">All sessions</button>`}${tagList.map(t => `<button class="chip tag ${ui.ctag===t?'on':''}" style="--c:${color}" data-act="ctag" data-tag="${esc(t)}">${esc(t)} <span class="n">${tc.get(t)||0}</span></button>`).join('')}</div>`;
+  let html = `<div class="chips" data-ck="cg">${db.groups.map(x => `<button class="chip ${x.id===g.id?'on':''}" style="--c:${x.color}" data-act="cg" data-g="${x.id}"><i></i>${esc(x.name)}</button>`).join('')}</div>
+    <div class="chips" data-ck="tags">${g.noAll ? '' : `<button class="chip tag ${!ui.ctag?'on':''}" style="--c:${color}" data-act="ctag" data-tag="">All sessions</button>`}${tagList.map(t => `<button class="chip tag ${ui.ctag===t?'on':''}" style="--c:${color}" data-act="ctag" data-tag="${esc(t)}">${esc(t)} <span class="n">${tc.get(t)||0}</span></button>`).join('')}</div>`;
 
   const all = sessOf(g.id).sort((a,b) => a.t - b.t);
   const ss = ui.ctag ? all.filter(s => s.tags.includes(ui.ctag)) : all;
@@ -1083,7 +1111,7 @@ function renderLog(){
   let list = db.sessions.filter(s => (ui.lg === 'all' || s.g === ui.lg) && grp(s.g));
   if(q) list = list.filter(s => s.tags.some(t => t.toLowerCase().includes(q)) || (s.note||'').toLowerCase().includes(q));
   const total = list.length; const shown = list.slice(0, ui.limit);
-  let html = `<div class="chips"><button class="chip ${ui.lg==='all'?'on':''}" data-act="lg" data-g="all">All</button>${db.groups.map(g => `<button class="chip ${ui.lg===g.id?'on':''}" style="--c:${g.color}" data-act="lg" data-g="${g.id}"><i></i>${esc(g.name)}</button>`).join('')}</div>
+  let html = `<div class="chips" data-ck="lg"><button class="chip ${ui.lg==='all'?'on':''}" data-act="lg" data-g="all">All</button>${db.groups.map(g => `<button class="chip ${ui.lg===g.id?'on':''}" style="--c:${g.color}" data-act="lg" data-g="${g.id}"><i></i>${esc(g.name)}</button>`).join('')}</div>
     <input class="search" id="q" type="search" placeholder="Search tags and notes" value="${esc(ui.q)}">`;
   if(!shown.length) html += `<div class="card empty">No sessions${q ? ' match that search' : ''}.</div>`;
   const monthN = new Map(); list.forEach(s => { const k = monthKey(s.t); monthN.set(k, (monthN.get(k)||0)+1); });
@@ -1496,6 +1524,8 @@ view.addEventListener('click', ev => {
   else if(a === 'lg'){ ui.lg = b.dataset.g; ui.limit = 120; later(); }
   else if(a === 'more'){ ui.limit += 300; later(); }
   else if(a === 'drill') drillSheet(b.dataset.d);
+  else if(a === 'chipmore'){ chipOpen.add(b.dataset.ck); clampChips(view); }
+  else if(a === 'chipless'){ chipOpen.delete(b.dataset.ck); clampChips(view); }
   else if(a === 'period'){ ui.period = b.dataset.p; saveUI(); later(); }
   else if(a === 'newPeriod') periodSheet();
   else if(a === 'resetOrder'){ ui.chartOrder = null; saveUI(); later(); }
