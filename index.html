@@ -59,6 +59,9 @@
   Hand, #F7F8FA ground, white cards, #2F6FE4 accent).
 
   CHANGELOG
+  v1.3.0 — Log/edit sheet: month calendar (Mon-first, future days off, dots
+           on days that already have a session in the chosen group) plus a
+           time box and "Now" button, replacing the datetime scroller.
   v1.2.1 — Connected to Firebase project tally-85dd6 (RTDB europe-west1).
   v1.2.0 — End-to-end encrypted vault with PIN lock, recovery code and
            Firebase RTDB sync. Plain v1.1 local data is migrated into the
@@ -79,7 +82,7 @@
 <meta name="theme-color" content="#F7F8FA">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Tally">
-<title>Tally v1.2.1</title>
+<title>Tally v1.3.0</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Patrick+Hand&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -202,6 +205,19 @@
   .field input, .field select, .field textarea{font:inherit; font-size:15px; padding:9px 11px; border-radius:10px; border:1px solid var(--line); background:var(--surface); color:var(--paper); width:100%; min-width:0;}
   .field textarea{min-height:56px; resize:vertical;}
   .tagsec{display:grid; gap:6px;}
+  .cal{border:1px solid var(--line); border-radius:12px; padding:8px 8px 6px;}
+  .cal-h{display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;}
+  .cal-h span{font-weight:600; font-size:14.5px;}
+  .cal-g{display:grid; grid-template-columns:repeat(7,1fr); gap:2px; text-align:center;}
+  .cal-g .dh{font:10px 'IBM Plex Mono',monospace; color:var(--muted); padding:4px 0 2px;}
+  .cal-g .d{height:40px; border:0; background:none; border-radius:50%; font:500 14.5px 'Inter',sans-serif; color:var(--paper); position:relative; cursor:pointer; padding:0; width:40px; justify-self:center;}
+  .cal-g .d:disabled{color:var(--line); cursor:default;}
+  .cal-g .d.today{box-shadow:inset 0 0 0 1.5px var(--mustard); color:var(--mustard); font-weight:700;}
+  .cal-g .d.sel{background:var(--mustard); color:#fff; box-shadow:none;}
+  .cal-g .d.has::after{content:''; position:absolute; bottom:5px; left:50%; width:5px; height:5px; margin-left:-2.5px; border-radius:50%; background:var(--c);}
+  .cal-g .d.sel.has::after{background:#fff;}
+  .time-row{display:flex; gap:8px; align-items:center;}
+  .time-row input{flex:1; font:600 17px 'IBM Plex Mono',monospace; padding:9px 11px; border-radius:10px; border:1px solid var(--line); background:var(--surface); color:var(--paper); min-width:0;}
   .sec{font-family:'IBM Plex Mono',monospace; font-size:10.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); margin:6px 0 -6px; border-top:1px solid var(--surface-2); padding-top:12px;}
   .srow{display:grid; grid-template-columns:34px minmax(0,1fr) auto; gap:8px; align-items:center;}
   .srow input[type=color]{width:34px; height:34px; padding:0; border:1px solid var(--line); border-radius:9px; background:none;}
@@ -243,7 +259,7 @@
   <div class="title-row">
     <h1 class="title">Tally</h1>
     <div class="title-right">
-      <span class="version-badge">v1.2.1</span>
+      <span class="version-badge">v1.3.0</span>
       <button class="icon-btn" id="openSettings" aria-label="Settings">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       </button>
@@ -262,7 +278,7 @@
 
 <script>
 'use strict';
-const VERSION = '1.2.1';
+const VERSION = '1.3.0';
 const STORE_KEY = 'tally.v1';
 const UI_KEY = 'tally.ui';
 const SESSION_WINDOW = 15 * 60000;
@@ -540,6 +556,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 const pad = n => String(n).padStart(2,'0');
 const DOW = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 const fmtDate = t => { const d = new Date(t); return `${DOW[d.getDay()]} ${pad(d.getDate())}/${pad(d.getMonth()+1)}/${String(d.getFullYear()).slice(2)}`; };
 const fmtTime = t => { const d = new Date(t); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 function sinceHTML(t){
@@ -550,7 +567,6 @@ function sinceHTML(t){
   return `${d}<span class="u">${d===1?'day':'days'}</span>${pad(h)}:${pad(m)}:${pad(s)}`;
 }
 function gapText(ms){ const d = ms/DAY; if(d < 1) return Math.round(ms/3600000) + ' h'; if(d < 60) return (d < 10 ? d.toFixed(1) : Math.round(d)) + ' d'; return (d/30.44).toFixed(1) + ' mo'; }
-const toLocalInput = t => { const d = new Date(t); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 const monthKey = t => { const d = new Date(t); return d.getFullYear()*12 + d.getMonth(); };
 const mkLabel = k => `${pad(k%12+1)}/${String(Math.floor(k/12)).slice(2)}`;
 const pct = (a,b) => b ? Math.round(a/b*100) + '%' : '–';
@@ -785,7 +801,10 @@ function sessionSheet(opts){
     <div class="sheet-head"><h3>${s ? 'Edit session' : 'Log session'}</h3><button class="x" data-close aria-label="Close">✕</button></div>
     <div class="chips" id="gPick"></div>
     <div id="tagPick" style="display:grid;gap:10px"></div>
-    <label class="field"><span>When</span><input type="datetime-local" id="fT" value="${toLocalInput(s ? s.t : Date.now())}"></label>
+    <div class="field"><span>When · <b id="whenTxt" style="letter-spacing:0;text-transform:none;color:var(--paper);font-family:Inter,sans-serif;font-size:12.5px"></b></span>
+      <div class="cal" id="cal"></div>
+      <div class="time-row"><input type="time" id="fTime" value="${fmtTime(s ? s.t : Date.now())}" aria-label="Time"><button class="chip" data-now>Now</button></div>
+    </div>
     <label class="field"><span>Note</span><textarea id="fN" placeholder="optional">${esc(s ? s.note : '')}</textarea></label>
     <button class="btn primary block" id="fSave">${s ? 'Save changes' : 'Log it'}</button>
     ${s ? `<button class="btn danger block" id="fDel">Delete session</button>` : ''}
@@ -797,16 +816,50 @@ function sessionSheet(opts){
       sh.querySelector('#tagPick').innerHTML = tagSections(ordered).map(([h, ts]) => `<div class="tagsec">${h ? `<span class="lbl">${esc(h)}</span>` : ''}<div class="chips wrap">${ts.map(t => `<button class="chip tag ${tags.has(t)?'on':''}" style="--c:${g.color}" data-t="${esc(t)}">${esc(t)}</button>`).join('')}</div></div>`).join('')
         + `<div class="chips wrap"><button class="chip add" data-newtag>+ new tag</button></div>`;
     };
-    draw();
-    sh.querySelector('#gPick').addEventListener('click', ev => { const b = ev.target.closest('[data-pg]'); if(b && b.dataset.pg !== gid){ gid = b.dataset.pg; tags = new Set(); draw(); } });
+    // calendar
+    const t0 = s ? s.t : Date.now(), d0 = new Date(t0);
+    let sel = {y:d0.getFullYear(), m:d0.getMonth(), d:d0.getDate()};
+    let vm = sel.y*12 + sel.m;
+    const timeIn = sh.querySelector('#fTime');
+    const dayKey = (y,m,d) => y*10000 + m*100 + d;
+    const drawCal = () => {
+      const now = new Date(), nowK = now.getFullYear()*12 + now.getMonth(), todayKey = dayKey(now.getFullYear(), now.getMonth(), now.getDate());
+      const y = Math.floor(vm/12), m = vm%12, g = grp(gid);
+      const has = new Set(); db.sessions.forEach(x => { if(x.g === gid && x !== s){ const q = new Date(x.t); if(q.getFullYear() === y && q.getMonth() === m) has.add(q.getDate()); } });
+      const lead = (new Date(y, m, 1).getDay() + 6) % 7, days = new Date(y, m+1, 0).getDate();
+      let cells = ['M','T','W','T','F','S','S'].map(x => `<span class="dh">${x}</span>`).join('') + '<span></span>'.repeat(lead);
+      for(let d = 1; d <= days; d++){
+        const k = dayKey(y,m,d), cls = ['d'];
+        if(k === todayKey) cls.push('today');
+        if(sel.y === y && sel.m === m && sel.d === d) cls.push('sel');
+        if(has.has(d)) cls.push('has');
+        cells += `<button class="${cls.join(' ')}" data-day="${d}" ${k > todayKey ? 'disabled' : ''}>${d}</button>`;
+      }
+      sh.querySelector('#cal').style.setProperty('--c', g.color);
+      sh.querySelector('#cal').innerHTML = `<div class="cal-h"><button class="x" data-cm="-1" aria-label="Previous month">‹</button><span>${MONTHS[m]} ${y}</span><button class="x" data-cm="1" aria-label="Next month" ${vm >= nowK ? 'disabled' : ''}>›</button></div><div class="cal-g">${cells}</div>`;
+      const sd = new Date(sel.y, sel.m, sel.d);
+      sh.querySelector('#whenTxt').textContent = `${DOW[sd.getDay()]} ${sd.getDate()} ${MON[sel.m]} ${sel.y}${k0(sd) === todayKey ? ' (today)' : ''}`;
+    };
+    const k0 = d => dayKey(d.getFullYear(), d.getMonth(), d.getDate());
+    sh.querySelector('#cal').addEventListener('click', ev => {
+      const cm = ev.target.closest('[data-cm]'); if(cm && !cm.disabled){ vm += +cm.dataset.cm; drawCal(); return; }
+      const b = ev.target.closest('[data-day]'); if(b && !b.disabled){ sel = {y:Math.floor(vm/12), m:vm%12, d:+b.dataset.day}; drawCal(); }
+    });
+    sh.querySelector('[data-now]').addEventListener('click', () => { const n = new Date(); sel = {y:n.getFullYear(), m:n.getMonth(), d:n.getDate()}; vm = sel.y*12 + sel.m; timeIn.value = fmtTime(n); drawCal(); });
+    draw(); drawCal();
+    sh.querySelector('#gPick').addEventListener('click', ev => { const b = ev.target.closest('[data-pg]'); if(b && b.dataset.pg !== gid){ gid = b.dataset.pg; tags = new Set(); draw(); drawCal(); } });
     sh.querySelector('#tagPick').addEventListener('click', ev => {
       const b = ev.target.closest('[data-t]');
       if(b){ const t = b.dataset.t; tags.has(t) ? tags.delete(t) : tags.add(t); b.classList.toggle('on', tags.has(t)); return; }
       if(ev.target.closest('[data-newtag]')){ const n = (prompt('New tag for ' + grp(gid).name) || '').trim(); if(n){ ensureTag(grp(gid), n); tags.add(n); save(); draw(); } }
     });
     sh.querySelector('#fSave').addEventListener('click', () => {
-      const t = new Date(sh.querySelector('#fT').value).getTime();
-      if(!isFinite(t)){ toast('Check the date and time'); return; }
+      const [hh, mm] = (timeIn.value || '').split(':').map(Number);
+      if(!isFinite(hh) || !isFinite(mm)){ toast('Pick a time'); return; }
+      let t = new Date(sel.y, sel.m, sel.d, hh, mm).getTime();
+      if(s && Math.floor(s.t/60000) === Math.floor(t/60000)) t = s.t;          // unchanged → keep exact stamp
+      else if(!s && sel.d === d0.getDate() && sel.m === d0.getMonth() && sel.y === d0.getFullYear() && timeIn.value === fmtTime(t0)) t = t0;
+      if(t > Date.now() + 60000){ toast('That time is in the future'); return; }
       const order = grp(gid).tags;
       const rec = {g:gid, t, tags:[...tags].sort((a,b) => order.indexOf(a) - order.indexOf(b)), note: sh.querySelector('#fN').value.trim()};
       let added = null;
