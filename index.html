@@ -59,6 +59,12 @@
   Hand, #F7F8FA ground, white cards, #2F6FE4 accent).
 
   CHANGELOG
+  v1.5.0 — "What's normal": each Now card shows where today's gap sits against
+           a baseline (median, 25–75% usual band, average) with calm wording
+           (normBlock). Baseline period picker: 3/6/12 months, each year, all
+           time, plus named custom month ranges saved in db.periods (synced).
+           Charts get a "What's normal" card (gap histogram + typical gap by
+           year) and the gap stats follow the chosen period.
   v1.4.0 — Long-press (0.4 s) then drag to reorder chart cards (order kept per
            device in ui.chartOrder, "reset order" link) and Now counters
            (order saved to db, so it syncs). makeSortable() does both.
@@ -85,7 +91,7 @@
 <meta name="theme-color" content="#F7F8FA">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Tally">
-<title>Tally v1.4.0</title>
+<title>Tally v1.5.0</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Patrick+Hand&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -208,8 +214,21 @@
   .field input, .field select, .field textarea{font:inherit; font-size:15px; padding:9px 11px; border-radius:10px; border:1px solid var(--line); background:var(--surface); color:var(--paper); width:100%; min-width:0;}
   .field textarea{min-height:56px; resize:vertical;}
   .tagsec{display:grid; gap:6px;}
+  .per-wrap{display:grid; gap:6px;}
+  .per-wrap .lbl{margin-left:2px;}
+  .chips.per .chip{font-size:12px; padding:5px 10px;}
+  .norm{display:grid; gap:5px; margin:4px 0 2px; padding:9px 10px 8px; background:var(--surface-2); border-radius:10px;}
+  .norm-line{font-size:13px; color:var(--paper-dim); line-height:1.35;}
+  .norm-line b{color:var(--paper);}
+  .norm-sub{font-size:11.5px; color:var(--paper-dim); font-family:'IBM Plex Mono',monospace;}
+  .muted{color:var(--muted);}
+  .nbar{position:relative; height:12px; border-radius:6px; background:var(--surface); border:1px solid var(--line); margin:2px 0;}
+  .nbar .band{position:absolute; top:1px; bottom:1px; border-radius:5px; background:color-mix(in srgb, var(--c) 28%, transparent);}
+  .nbar .med{position:absolute; top:-2px; bottom:-2px; width:2px; margin-left:-1px; background:var(--paper-dim); border-radius:1px;}
+  .nbar .cur{position:absolute; top:50%; width:14px; height:14px; margin:-7px 0 0 -7px; border-radius:50%; background:var(--c); border:2px solid var(--surface); box-shadow:0 1px 3px rgba(38,49,63,.3);}
   html.no-anchor, html.no-anchor body{overflow-anchor:none;}
-  .dz{-webkit-user-select:none; user-select:none; -webkit-touch-callout:none; position:relative;}
+  main, #sortNow, #sortCharts, .per-wrap{grid-template-columns:minmax(0,1fr);}
+  .dz{min-width:0; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; position:relative;}
   .dz.lifted{z-index:30; filter:drop-shadow(0 10px 22px rgba(38,49,63,.25)); opacity:.97;}
   .dz.lifted.card, .dz.lifted > .card, .dz.lifted > .stats{outline:2px solid var(--mustard); outline-offset:-1px; border-radius:var(--radius);}
   .cal{border:1px solid var(--line); border-radius:12px; padding:8px 8px 6px;}
@@ -266,7 +285,7 @@
   <div class="title-row">
     <h1 class="title">Tally</h1>
     <div class="title-right">
-      <span class="version-badge">v1.4.0</span>
+      <span class="version-badge">v1.5.0</span>
       <button class="icon-btn" id="openSettings" aria-label="Settings">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       </button>
@@ -285,7 +304,7 @@
 
 <script>
 'use strict';
-const VERSION = '1.4.0';
+const VERSION = '1.5.0';
 const STORE_KEY = 'tally.v1';
 const UI_KEY = 'tally.ui';
 const SESSION_WINDOW = 15 * 60000;
@@ -305,7 +324,7 @@ const FAIL_KEY = 'tally.fails';
 const LOCK_AFTER = 60000;
 const PBKDF2_ITER = 310000;
 
-const emptyDb = () => ({groups:[], sessions:[], counters:[]});
+const emptyDb = () => ({groups:[], sessions:[], counters:[], periods:[]});
 let db = emptyDb();
 let ui = Object.assign({tab:'now', cg:null, ctag:null, crange:'all', mixRange:'12m', lg:'all', q:'', limit:120}, loadUI());
 ui.limit = 120; ui.q = '';
@@ -314,11 +333,12 @@ function normalize(d){
   d = d && typeof d === 'object' ? d : {};
   return {groups: Array.isArray(d.groups) ? d.groups.map(g => Object.assign({tags:[]}, g)) : [],
           sessions: Array.isArray(d.sessions) ? d.sessions.map(s => Object.assign({tags:[], note:''}, s)).sort((a,b) => b.t - a.t) : [],
-          counters: Array.isArray(d.counters) ? d.counters : []};
+          counters: Array.isArray(d.counters) ? d.counters : [],
+          periods: Array.isArray(d.periods) ? d.periods : []};
 }
 function loadUI(){ try{ return JSON.parse(localStorage.getItem(UI_KEY)) || {}; }catch(e){ return {}; } }
 // UI state is not encrypted, so it never stores tag names
-function saveUI(){ try{ localStorage.setItem(UI_KEY, JSON.stringify({tab:ui.tab, cg:ui.cg, crange:ui.crange, mixRange:ui.mixRange, lg:ui.lg, chartOrder:ui.chartOrder||null})); }catch(e){} }
+function saveUI(){ try{ localStorage.setItem(UI_KEY, JSON.stringify({tab:ui.tab, cg:ui.cg, crange:ui.crange, mixRange:ui.mixRange, lg:ui.lg, chartOrder:ui.chartOrder||null, period:ui.period||null})); }catch(e){} }
 
 /* ───────── crypto ───────── */
 const te = new TextEncoder(), td = new TextDecoder();
@@ -382,7 +402,7 @@ function setSync(err){
 }
 function mergeDb(local, remote){
   const byId = (a, b) => { const m = new Map(); b.forEach(x => m.set(x.id, x)); a.forEach(x => m.set(x.id, x)); return [...m.values()]; };
-  const out = normalize({groups: byId(local.groups, remote.groups), sessions: byId(local.sessions, remote.sessions), counters: local.counters.length ? local.counters : remote.counters});
+  const out = normalize({groups: byId(local.groups, remote.groups), sessions: byId(local.sessions, remote.sessions), counters: local.counters.length ? local.counters : remote.counters, periods: byId(local.periods||[], remote.periods||[])});
   out.groups.forEach(g => { const rg = remote.groups.find(x => x.id === g.id); if(rg) rg.tags.forEach(t => ensureTag(g, t)); });
   return out;
 }
@@ -611,11 +631,82 @@ function emptyState(){
     </div></div>`;
 }
 
+/* BASELINE — "what's normal" over a chosen period */
+function periodList(){
+  const now = Date.now(), ys = [...new Set(db.sessions.map(s => new Date(s.t).getFullYear()))].sort((a,b) => b-a);
+  const mStart = ym => { const [y,m] = ym.split('-').map(Number); return new Date(y, m-1, 1).getTime(); };
+  const mEnd = ym => { const [y,m] = ym.split('-').map(Number); return new Date(y, m, 1).getTime(); };
+  return [
+    {id:'3m',  name:'Last 3 months',  short:'3 months',  from: now - 91*DAY},
+    {id:'6m',  name:'Last 6 months',  short:'6 months',  from: now - 182*DAY},
+    {id:'12m', name:'Last 12 months', short:'12 months', from: now - 365*DAY},
+    ...db.periods.map(p => ({id:p.id, name:p.name, short:p.name, from:mStart(p.from), to:p.to ? mEnd(p.to) : null, custom:true})),
+    ...ys.map(y => ({id:'y'+y, name:String(y), short:String(y), from:new Date(y,0,1).getTime(), to:new Date(y+1,0,1).getTime()})),
+    {id:'all', name:'All time', short:'all time', from:0}
+  ];
+}
+function curPeriod(){ const l = periodList(); return l.find(p => p.id === ui.period) || l.find(p => p.id === '12m'); }
+function quant(sorted, q){ if(!sorted.length) return 0; const i = (sorted.length-1)*q, lo = Math.floor(i), hi = Math.ceil(i); return sorted[lo] + (sorted[hi]-sorted[lo])*(i-lo); }
+// ssAsc: sessions oldest→newest. Gaps counted between consecutive sessions that both fall inside the period.
+function baseline(ssAsc, per){
+  const to = per.to || Infinity, inP = ssAsc.filter(s => s.t >= per.from && s.t < to);
+  const gaps = []; for(let i = 1; i < inP.length; i++) gaps.push(inP[i].t - inP[i-1].t);
+  const g = gaps.slice().sort((a,b) => a-b);
+  return {n:inP.length, gaps, sorted:g, med:quant(g,.5), p25:quant(g,.25), p75:quant(g,.75), p90:quant(g,.9), max:g[g.length-1]||0, mean:g.length ? g.reduce((a,b)=>a+b,0)/g.length : 0};
+}
+const dd = ms => { const d = ms/DAY; return d < 1 ? '<1' : d < 10 ? (Math.round(d*2)/2).toString().replace(/\.0$/,'') : String(Math.round(d)); };
+function normBlock(ssAsc, color, cur){
+  const per = curPeriod(), b = baseline(ssAsc, per);
+  if(b.gaps.length < 4) return `<div class="norm"><div class="norm-line muted">Not enough sessions in ${esc(per.short)} to know what's normal — try a longer period.</div></div>`;
+  const share = b.sorted.filter(x => x >= cur).length / b.sorted.length;
+  const inTen = `${Math.max(1, Math.round(share*10))} in 10`;
+  let head, sub;
+  if(cur < b.p25){ head = 'Early days'; sub = `the next one usually comes between day ${dd(b.p25)} and day ${dd(b.p75)}`; }
+  else if(cur <= b.p75){ head = 'Within your usual range'; sub = cur <= b.med ? `typical gap is ${dd(b.med)} days` : `past the typical ${dd(b.med)} days — ${inTen} gaps go this long`; }
+  else if(cur <= b.p90){ head = 'Longer than most, still common'; sub = `about ${inTen} gaps go this long`; }
+  else if(cur <= b.max){ head = 'A longer gap'; sub = `about ${inTen} gaps go this long · longest was ${dd(b.max)} days`; }
+  else { head = 'Longer than any gap in this period'; sub = `previous longest was ${dd(b.max)} days`; }
+  const scale = Math.max(b.p90 * 1.3, cur * 1.08, b.med * 2.2, 3*DAY);
+  const at = v => Math.min(100, v/scale*100).toFixed(1);
+  return `<div class="norm" style="--c:${color}">
+    <div class="norm-line"><b>${head}</b> · ${sub}</div>
+    <div class="nbar" aria-hidden="true"><span class="band" style="left:${at(b.p25)}%;width:${(at(b.p75)-at(b.p25)).toFixed(1)}%"></span><span class="med" style="left:${at(b.med)}%"></span><span class="cur" style="left:${at(cur)}%"></span></div>
+    <div class="norm-sub">Usual ${dd(b.p25)}–${dd(b.p75)} days · typical ${dd(b.med)} · average ${dd(b.mean)} <span class="muted">(${esc(per.short)})</span></div>
+  </div>`;
+}
+function periodChips(){
+  const cur = curPeriod();
+  return `<div class="chips per">${periodList().map(p => `<button class="chip ${p.id===cur.id?'on':''}" data-act="period" data-p="${p.id}">${esc(p.name)}</button>`).join('')}<button class="chip add" data-act="newPeriod">+ period</button></div>`;
+}
+function periodSheet(){
+  openSheet(`<div class="sheet-head"><h3>Custom period</h3><button class="x" data-close aria-label="Close">✕</button></div>
+    <p class="help">Name a stretch of time to compare against — for example "Before Vivian". Leave "to" empty to run up to today.</p>
+    <label class="field"><span>Name</span><input type="text" id="pN" placeholder="e.g. Before Vivian" autocomplete="off"></label>
+    <div class="two" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <label class="field"><span>From (month)</span><input type="month" id="pF"></label>
+      <label class="field"><span>To (month, optional)</span><input type="month" id="pT"></label>
+    </div>
+    <button class="btn primary block" id="pSave">Save period</button>
+    ${db.periods.length ? `<p class="sec">Your periods</p><div style="display:grid;gap:6px">${db.periods.map(p => `<div class="srow" style="grid-template-columns:minmax(0,1fr) auto"><span style="font-size:14px"><b>${esc(p.name)}</b> <span class="muted" style="font-size:12px">${esc(p.from)} → ${esc(p.to||'now')}</span></span><button class="x" data-pdel="${p.id}" aria-label="Delete">✕</button></div>`).join('')}</div>` : ''}`, sh => {
+    sh.querySelector('#pSave').onclick = () => {
+      const name = sh.querySelector('#pN').value.trim(), from = sh.querySelector('#pF').value, to = sh.querySelector('#pT').value;
+      if(!name || !from){ toast('Give it a name and a start month'); return; }
+      if(to && to < from){ toast('"To" is before "From"'); return; }
+      const p = {id:'p'+uid(), name, from, to: to || null}; db.periods.push(p); ui.period = p.id;
+      save(); saveUI(); closeSheet(); render();
+    };
+    sh.querySelectorAll('[data-pdel]').forEach(b => b.onclick = () => {
+      db.periods = db.periods.filter(p => p.id !== b.dataset.pdel); if(ui.period === b.dataset.pdel) ui.period = '12m';
+      save(); saveUI(); closeSheet(); render(); setTimeout(periodSheet, 0);
+    });
+  });
+}
+
 /* NOW */
 function renderNow(){
   const now = new Date(), mk = monthKey(now), yr = now.getFullYear();
   const ctrs = db.counters.length ? db.counters : db.groups.map(g => ({id:'g'+g.id, name:g.name, g:g.id, tag:null, color:g.color}));
-  view.innerHTML = '<div id="sortNow" style="display:grid;gap:14px">' + ctrs.map(c => {
+  view.innerHTML = `<div class="per-wrap"><span class="lbl">Normal based on</span>${periodChips()}</div>` + '<div id="sortNow" style="display:grid;gap:14px">' + ctrs.map(c => {
     const g = grp(c.g); if(!g) return '';
     const ss = db.sessions.filter(s => ctrMatches(c, s));
     const last = ss[0];  // sessions are kept newest first
@@ -627,6 +718,7 @@ function renderNow(){
       </div>
       <div class="since" ${last ? `data-since="${last.t}"` : ''}>${last ? sinceHTML(last.t) : '—'}</div>
       <div class="last">${last ? `${fmtDate(last.t)} · ${fmtTime(last.t)}` : 'Nothing logged yet'}</div>
+      ${last ? normBlock(ss.slice().reverse(), c.color, Date.now() - last.t) : ''}
       ${last && last.tags.length ? `<div class="mini-tags">${last.tags.map(t => `<span class="mt ${t===c.tag?'hl':''}">${esc(t)}</span>`).join('')}</div>` : ''}
       <div class="meta"><span>this month <b>${m}</b></span><span>${yr} <b>${y}</b></span><span>all time <b>${ss.length}</b></span></div>
     </section>`;
@@ -636,7 +728,11 @@ function renderNow(){
     else db.groups.sort((a,b) => keys.indexOf('g'+a.id) - keys.indexOf('g'+b.id));
     save();
   });
-  tick = setInterval(() => view.querySelectorAll('[data-since]').forEach(el => el.innerHTML = sinceHTML(+el.dataset.since)), 1000);
+  let n = 0;
+  tick = setInterval(() => {
+    view.querySelectorAll('[data-since]').forEach(el => el.innerHTML = sinceHTML(+el.dataset.since));
+    if(++n % 300 === 0 && !sheetEl && !dragging) render();   // refresh the "normal" bars every 5 min
+  }, 1000);
 }
 
 /* LONG-PRESS DRAG TO REORDER
@@ -736,7 +832,7 @@ function svgBars(labels, vals, color, h=170, hi=-1){
   vals.forEach((v,i) => {
     const x0 = L + i*bw + bw*0.14, w = bw*0.72;
     if(v > 0) g += `<rect x="${x0}" y="${y(v)}" width="${w}" height="${y(0)-y(v)}" rx="3" fill="${color}" opacity="${hi>=0 && i!==hi ? .55 : 1}"/>`;
-    if(v > 0 && n <= 14) g += `<text class="ax" x="${x0+w/2}" y="${y(v)-3}" text-anchor="middle" style="fill:var(--paper)">${v}</text>`;
+    if(v > 0 && n <= 14) g += `<text class="ax" x="${x0+w/2}" y="${y(v)-3}" text-anchor="middle" style="fill:var(--paper)">${+v.toFixed(1)}</text>`;
     g += `<text class="ax" x="${x0+w/2}" y="${H-6}" text-anchor="middle">${esc(labels[i])}</text>`;
   });
   g += `<line class="base" x1="${L}" x2="${W-R}" y1="${y(0)}" y2="${y(0)}"/>`;
@@ -789,13 +885,15 @@ function renderCharts(){
   const mix = new Map(); mixFrom.forEach(s => s.tags.forEach(t => { if(t !== ui.ctag) mix.set(t, (mix.get(t)||0)+1); }));
   const mixRows = [...mix.entries()].sort((a,b) => b[1]-a[1]).map(([t,v]) => [esc(t), v]);
 
+  const per = curPeriod(), bl = baseline(ss, per);
   const blocks = {};
+  blocks.gaps = gapsCard(ss, bl, per, cur, color);
   blocks.stats = `
   <div class="stats">
     <div class="stat"><span class="k">${yr} so far</span><span class="v">${thisYr}</span><span class="s">${(thisYr/ytdM).toFixed(1)}/month · same point ${yr-1}: ${lastYrSame}</span></div>
     <div class="stat"><span class="k">Last 12 months</span><span class="v">${sum12}</span><span class="s">${(sum12/12).toFixed(1)}/month</span></div>
-    <div class="stat"><span class="k">Typical gap</span><span class="v">${gapText(med)}</span><span class="s">median between sessions</span></div>
-    <div class="stat"><span class="k">Current gap</span><span class="v">${gapText(cur)}</span><span class="s">${cur >= longest ? 'longest ever' : `longer than ${pct(gaps.length - curRank, gaps.length)} of gaps`} · record ${gapText(longest)}</span></div>
+    <div class="stat"><span class="k">Typical gap</span><span class="v">${bl.gaps.length ? dd(bl.med) + ' d' : '–'}</span><span class="s">${bl.gaps.length ? `usual ${dd(bl.p25)}–${dd(bl.p75)} d` : 'not enough data'} · ${esc(per.short)}</span></div>
+    <div class="stat"><span class="k">Current gap</span><span class="v">${gapText(cur)}</span><span class="s">${bl.gaps.length ? `longer than ${pct(bl.sorted.filter(x => x < cur).length, bl.sorted.length)} of gaps (${esc(per.short)})` : ''} · record ${gapText(longest)}</span></div>
   </div>`;
   blocks.month = `<section class="card">
     <div class="card-h"><h2>Per month</h2><span class="seg"><button class="${ui.crange==='2y'?'on':''}" data-act="crange" data-v="2y">2Y</button><button class="${ui.crange==='all'?'on':''}" data-act="crange" data-v="all">All</button></span></div>
@@ -826,7 +924,25 @@ function renderCharts(){
   view.innerHTML = html;
   makeSortable(document.getElementById('sortCharts'), keys => { ui.chartOrder = keys; saveUI(); setTimeout(render, 0); });
 }
-const CHART_KEYS = ['stats','month','last12','year','dow','tod','mix'];
+const CHART_KEYS = ['stats','gaps','month','last12','year','dow','tod','mix'];
+function gapsCard(ss, bl, per, cur, color){
+  const B = [[0,3,'0–3'],[3,7,'4–7'],[7,14,'1–2w'],[14,21,'2–3w'],[21,31,'3–4w'],[31,Infinity,'4w+']];
+  const counts = B.map(([a,b]) => bl.gaps.filter(g => g/DAY >= a && g/DAY < b).length);
+  const curB = B.findIndex(([a,b]) => cur/DAY >= a && cur/DAY < b);
+  // typical gap by year, for perspective
+  const ys = [...new Set(ss.map(s => new Date(s.t).getFullYear()))].sort();
+  const yMed = ys.map(y => { const b = baseline(ss, {from:new Date(y,0,1).getTime(), to:new Date(y+1,0,1).getTime()}); return b.gaps.length >= 2 ? Math.round(b.med/DAY*10)/10 : 0; });
+  return `<section class="card">
+    <div class="card-h"><h2>What's normal</h2><span class="sub">gaps between sessions</span></div>
+    ${periodChips()}
+    ${bl.gaps.length >= 2 ? `
+      <p class="help" style="margin:8px 0 4px">In <b>${esc(per.name.toLowerCase().startsWith('last') ? 'the ' + per.name.toLowerCase() : per.name)}</b>: typical gap <b>${dd(bl.med)} days</b>, usual range <b>${dd(bl.p25)}–${dd(bl.p75)}</b>, average ${dd(bl.mean)}, longest ${dd(bl.max)}. ${bl.n} sessions.</p>
+      ${svgBars(B.map(x => x[2]), counts, color, 160, curB)}
+      <p class="help" style="margin:2px 0 0;text-align:center">How long gaps lasted · darker bar = where today's gap sits</p>` : `<p class="help" style="margin-top:8px">Not enough sessions in ${esc(per.short)}.</p>`}
+    ${ys.length > 1 ? `<div class="card-h" style="margin:14px 0 4px"><h2 style="font-size:18px">Typical gap by year</h2><span class="sub">days</span></div>
+      ${svgBars(ys.map(y => "'" + String(y).slice(2)), yMed, color, 130, ys.indexOf(new Date().getFullYear()))}` : ''}
+  </section>`;
+}
 function chartOrder(){
   const o = Array.isArray(ui.chartOrder) ? ui.chartOrder.filter(k => CHART_KEYS.includes(k)) : [];
   return o.concat(CHART_KEYS.filter(k => !o.includes(k)));
@@ -1252,6 +1368,8 @@ view.addEventListener('click', ev => {
   else if(a === 'mix'){ ui.mixRange = b.dataset.v; later(); }
   else if(a === 'lg'){ ui.lg = b.dataset.g; ui.limit = 120; later(); }
   else if(a === 'more'){ ui.limit += 300; later(); }
+  else if(a === 'period'){ ui.period = b.dataset.p; saveUI(); later(); }
+  else if(a === 'newPeriod') periodSheet();
   else if(a === 'resetOrder'){ ui.chartOrder = null; saveUI(); later(); }
   else if(a === 'import') document.getElementById('fileIn').click();
   else if(a === 'newGroup') newGroupPrompt();
