@@ -60,6 +60,9 @@
   Hand, #F7F8FA ground, white cards, #2F6FE4 accent).
 
   CHANGELOG
+  v1.8.1 — Installable as an app: real manifest.webmanifest + PNG icons
+           (192/512/maskable, apple-touch-icon) replace the runtime blob
+           manifest, which Chrome on Android would only add as a shortcut.
   v1.8.0 — Dark theme (Home dashboard palette). Follows the phone's setting
            until the sun/moon button in the header is used; choice saved
            per device in localStorage tally.theme. Inverse tokens --inv-bg /
@@ -122,7 +125,11 @@
 <meta name="theme-color" content="#F7F8FA">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Tally">
-<title>Tally v1.8.0</title>
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<title>Tally v1.8.1</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Patrick+Hand&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -347,7 +354,7 @@
   <div class="title-row">
     <h1 class="title">Tally</h1>
     <div class="title-right">
-      <span class="version-badge">v1.8.0</span>
+      <span class="version-badge">v1.8.1</span>
       <button class="icon-btn" id="themeBtn" aria-label="Switch light or dark theme"></button>
       <button class="icon-btn" id="openSettings" aria-label="Settings">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
@@ -367,7 +374,7 @@
 
 <script>
 'use strict';
-const VERSION = '1.8.0';
+const VERSION = '1.8.1';
 const STORE_KEY = 'tally.v1';
 const UI_KEY = 'tally.ui';
 const SESSION_WINDOW = 15 * 60000;
@@ -1715,14 +1722,8 @@ document.addEventListener('visibilitychange', () => {
   if(V && ui.tab === 'now' && !sheetEl) render();
 });
 
-/* PWA: inline manifest + service worker */
-(function(){
-  const icon = 'data:image/svg+xml,' + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="112" fill="#2F6FE4"/><g stroke="#fff" stroke-width="34" stroke-linecap="round"><line x1="150" y1="150" x2="150" y2="362"/><line x1="222" y1="150" x2="222" y2="362"/><line x1="294" y1="150" x2="294" y2="362"/><line x1="366" y1="150" x2="366" y2="362"/><line x1="110" y1="330" x2="404" y2="190"/></g></svg>`);
-  const man = {name:'Tally', short_name:'Tally', start_url:location.href.split('#')[0], display:'standalone', background_color:'#F7F8FA', theme_color:'#F7F8FA', icons:[{src:icon, sizes:'512x512', type:'image/svg+xml', purpose:'any'}]};
-  const l = document.createElement('link'); l.rel = 'manifest'; l.href = URL.createObjectURL(new Blob([JSON.stringify(man)], {type:'application/manifest+json'})); document.head.append(l);
-  const ic = document.createElement('link'); ic.rel = 'icon'; ic.href = icon; document.head.append(ic);
-  if('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
-})();
+/* PWA: manifest.webmanifest + icons are real files (Chrome won't install from a blob manifest) */
+if('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
 
 document.body.append(lockEl);
 if(!window.crypto || !crypto.subtle) showLock(`${LOGO}<h2>Can't open securely</h2><p>This browser can't do the encryption Tally needs. Open it from the https:// address.</p>`);
