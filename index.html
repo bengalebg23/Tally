@@ -60,6 +60,13 @@
   Hand, #F7F8FA ground, white cards, #2F6FE4 accent).
 
   CHANGELOG
+  v1.7.0 — Overlay: Charts tag chips are multi-select (ui.ctags, up to 4).
+           Two or more → overlayBlocks(): side-by-side table, per-tag "what's
+           normal", multi-line per month (3-mo avg or raw), grouped bars
+           (svgGBars) for last 12 / year / weekday / time of day, and a
+           "Together" co-occurrence card. Drill-down uses the union.
+           Settings → Groups: "Merge X into…" moves sessions, tags and
+           counters into another group and removes X (nothing else changes).
   v1.6.3 — Filter chip rows wrap instead of side-scrolling; clampChips() keeps
            each row (data-ck) to two lines with a "+N more" / "Less" chip.
            Shorter period chip labels (3 mo / 6 mo / 12 mo / All).
@@ -111,7 +118,7 @@
 <meta name="theme-color" content="#F7F8FA">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Tally">
-<title>Tally v1.6.3</title>
+<title>Tally v1.7.0</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Patrick+Hand&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -233,6 +240,16 @@
   .field textarea{min-height:56px; resize:vertical;}
   .tagsec{display:grid; gap:6px;}
   .per-wrap{display:grid; gap:6px;}
+  table.cmp{width:100%; border-collapse:collapse; font-size:12.5px;}
+  table.cmp th{font:500 10px 'IBM Plex Mono',monospace; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); text-align:right; padding:0 0 6px;}
+  table.cmp td{padding:7px 0; border-top:1px solid var(--surface-2); text-align:right; font-family:'IBM Plex Mono',monospace; font-variant-numeric:tabular-nums;}
+  table.cmp td:first-child{text-align:left; font-family:'Inter',sans-serif; font-weight:600; max-width:120px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  table.cmp td i, .ov-t i, .pair-row i{display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px; vertical-align:0;}
+  .ov-t{font-weight:600; font-size:13.5px; margin-bottom:4px;}
+  .pair-row{display:grid; gap:2px; padding:8px 0; border-top:1px solid var(--surface-2); font-size:13px;}
+  .pair-row:first-of-type{border-top:0;}
+  .pair-row .mono{font-family:'IBM Plex Mono',monospace; font-size:11.5px; color:var(--paper-dim);}
+  .merge-sel{font:inherit; font-size:13px; padding:7px 10px; border-radius:9px; border:1px solid var(--line); background:var(--surface); color:var(--paper-dim);}
   svg.chart .hit{fill:transparent; cursor:pointer;}
   svg.chart.tappable .hit:active{fill:rgba(47,111,228,.10);}
   .hbar.tap{cursor:pointer; border-radius:6px;}
@@ -309,7 +326,7 @@
   <div class="title-row">
     <h1 class="title">Tally</h1>
     <div class="title-right">
-      <span class="version-badge">v1.6.3</span>
+      <span class="version-badge">v1.7.0</span>
       <button class="icon-btn" id="openSettings" aria-label="Settings">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       </button>
@@ -328,7 +345,7 @@
 
 <script>
 'use strict';
-const VERSION = '1.6.3';
+const VERSION = '1.7.0';
 const STORE_KEY = 'tally.v1';
 const UI_KEY = 'tally.ui';
 const SESSION_WINDOW = 15 * 60000;
@@ -672,15 +689,15 @@ function clampChips(root){
     if(chipOpen.has(key)){ el.insertAdjacentHTML('beforeend', `<button class="chip more" data-act="chipless" data-ck="${key}">Less ▴</button>`); return; }
     const line2 = tops[1];
     kids.forEach(k => { if(k.offsetTop > line2) k.hidden = true; });
-    const sel = kids.find(k => k.classList.contains('on'));
+    const sels = kids.filter(k => k.classList.contains('on'));
     const more = document.createElement('button'); more.className = 'chip more'; more.dataset.act = 'chipmore'; more.dataset.ck = key; el.append(more);
     for(let guard = 0; guard < 60; guard++){
       const hidden = kids.filter(k => k.hidden);
-      if(sel && sel.hidden){ sel.hidden = false; }
+      sels.forEach(x => x.hidden = false);
       more.textContent = `+${kids.filter(k => k.hidden).length} more`;
       const over = kids.filter(k => !k.hidden && k.offsetTop > line2);
       if(more.offsetTop <= line2 && !over.length) break;
-      const victim = kids.filter(k => !k.hidden && k !== sel).pop(); if(!victim) break;
+      const victim = kids.filter(k => !k.hidden && !sels.includes(k)).pop(); if(!victim) break;
       victim.hidden = true;
     }
   });
@@ -913,14 +930,14 @@ function drillSheet(spec, stack){
     if(d.year != null || stack.length && !spec.startsWith('m:')){ if(k !== curK){ flush(); curK = k; rows += `<div class="month-h"><span>${MON[k%12]} ${Math.floor(k/12)}</span><span>${d.list.filter(x => monthKey(x.t) === k).length}</span></div>`; } }
     const extra = d.gapOf ? `<div class="nt">after a ${dd(d.gapOf.get(s)*DAY)}-day gap</div>` : (s.note ? `<div class="nt">${esc(s.note)}</div>` : '');
     buf += `<button class="row" style="--c:${col}" data-edit="${s.id}"><i></i>
-      <span style="min-width:0">${s.tags.length ? `<div class="mini-tags">${s.tags.map(t => `<span class="mt ${t===c.ctag?'hl':''}">${esc(t)}</span>`).join('')}</div>` : '<div class="nt">no tags</div>'}${extra}</span>
+      <span style="min-width:0">${s.tags.length ? `<div class="mini-tags">${s.tags.map(t => `<span class="mt ${(c.hl||[]).includes(t)?'hl':''}">${esc(t)}</span>`).join('')}</div>` : '<div class="nt">no tags</div>'}${extra}</span>
       <span class="dt">${fmtDate(s.t)}<br>${fmtTime(s.t)}</span></button>`;
   });
   flush();
   openSheet(`
     <div class="sheet-head">
       ${stack.length > 1 ? '<button class="x" data-back aria-label="Back">‹</button>' : ''}
-      <div style="flex:1;min-width:0"><h3>${esc(d.title)}</h3><p class="help" style="margin:2px 0 0">${esc(c.g.name)}${c.ctag ? ' · ' + esc(c.ctag) : ''}${d.note ? ' · ' + esc(d.note) : ''}</p></div>
+      <div style="flex:1;min-width:0"><h3>${esc(d.title)}</h3><p class="help" style="margin:2px 0 0">${esc(c.g.name)}${(c.hl||[]).length ? ' · ' + esc(c.hl.join(' + ')) : ''}${d.note ? ' · ' + esc(d.note) : ''}</p></div>
       <button class="x" data-close aria-label="Close">✕</button>
     </div>
     <div class="stats">
@@ -983,17 +1000,24 @@ function hbars(rows, color, total, drill=null){
 function renderCharts(){
   if(!grp(ui.cg)) ui.cg = db.groups[0].id;
   const g = grp(ui.cg);
-  if(ui.ctag && !g.tags.includes(ui.ctag)) ui.ctag = null;
+  if(!Array.isArray(ui.ctags)) ui.ctags = ui.ctag ? [ui.ctag] : [];
+  ui.ctags = ui.ctags.filter(t => g.tags.includes(t));
   const tc = tagCounts(g.id);
-  if(g.noAll && !ui.ctag){
+  if(g.noAll && !ui.ctags.length){
     // this group has no "All sessions" view — default to its counter's tag, else its most-used tag
     const ctr = db.counters.find(c => c.g === g.id);
-    ui.ctag = (ctr && ctr.tags[0]) || [...tc.entries()].sort((a,b) => b[1]-a[1]).map(x => x[0])[0] || null;
+    const t = (ctr && ctr.tags[0]) || [...tc.entries()].sort((a,b) => b[1]-a[1]).map(x => x[0])[0];
+    if(t) ui.ctags = [t];
   }
+  ui.ctag = ui.ctags.length === 1 ? ui.ctags[0] : null;
+  const multi = ui.ctags.length > 1;
   const tagList = g.tags.slice().sort((a,b) => (tc.get(b)||0) - (tc.get(a)||0));
   const color = g.color;
-  let html = `<div class="chips" data-ck="cg">${db.groups.map(x => `<button class="chip ${x.id===g.id?'on':''}" style="--c:${x.color}" data-act="cg" data-g="${x.id}"><i></i>${esc(x.name)}</button>`).join('')}</div>
-    <div class="chips" data-ck="tags">${g.noAll ? '' : `<button class="chip tag ${!ui.ctag?'on':''}" style="--c:${color}" data-act="ctag" data-tag="">All sessions</button>`}${tagList.map(t => `<button class="chip tag ${ui.ctag===t?'on':''}" style="--c:${color}" data-act="ctag" data-tag="${esc(t)}">${esc(t)} <span class="n">${tc.get(t)||0}</span></button>`).join('')}</div>`;
+  const tcol = t => multi ? SERIES[ui.ctags.indexOf(t) % SERIES.length] : color;
+  let html = `${db.groups.length > 1 ? `<div class="chips" data-ck="cg">${db.groups.map(x => `<button class="chip ${x.id===g.id?'on':''}" style="--c:${x.color}" data-act="cg" data-g="${x.id}"><i></i>${esc(x.name)}</button>`).join('')}</div>` : ''}
+    <div class="chips" data-ck="tags">${g.noAll ? '' : `<button class="chip tag ${!ui.ctags.length?'on':''}" style="--c:${color}" data-act="ctag" data-tag="">All sessions</button>`}${tagList.map(t => `<button class="chip tag ${ui.ctags.includes(t)?'on':''}" style="--c:${ui.ctags.includes(t) ? tcol(t) : color}" data-act="ctag" data-tag="${esc(t)}">${esc(t)} <span class="n">${tc.get(t)||0}</span></button>`).join('')}</div>
+    <p class="help" style="margin:-6px 2px 0;font-size:11.5px">Tap tags to add or remove them — pick up to 4 to overlay.</p>`;
+  if(multi) return finishCharts(html, overlayBlocks(g, ui.ctags, tcol));
 
   const all = sessOf(g.id).sort((a,b) => a.t - b.t);
   const ss = ui.ctag ? all.filter(s => s.tags.includes(ui.ctag)) : all;
@@ -1027,7 +1051,7 @@ function renderCharts(){
   const mix = new Map(); mixFrom.forEach(s => s.tags.forEach(t => { if(t !== ui.ctag) mix.set(t, (mix.get(t)||0)+1); }));
   const mixRaw = [...mix.entries()].sort((a,b) => b[1]-a[1]);
   const mixRows = mixRaw.map(([t,v]) => [esc(t), v]);
-  chartCtx = {g, ss, what, ctag: ui.ctag, mixFrom, mixLabel: ui.mixRange === '12m' ? 'last 12 months' : 'all time'};
+  chartCtx = {g, ss, what, ctag: ui.ctag, hl: ui.ctag ? [ui.ctag] : [], mixFrom, mixLabel: ui.mixRange === '12m' ? 'last 12 months' : 'all time'};
 
   const per = curPeriod(), bl = baseline(ss, per);
   const blocks = {};
@@ -1062,12 +1086,100 @@ function renderCharts(){
     <p class="help" style="margin:-4px 0 6px">Share of ${mixFrom.length} ${ui.ctag ? esc(ui.ctag) + ' ' : ''}sessions that included each tag.</p>
     ${hbars(mixRows, color, mixFrom.length, mixRaw.map(([t]) => 'tag:'+t))}
   </section>` : '';
+  finishCharts(html, blocks);
+}
+function finishCharts(html, blocks){
   const order = chartOrder();
   html += `<div id="sortCharts" style="display:grid;gap:14px">${order.filter(k => blocks[k]).map(k => `<div class="dz" data-k="${k}">${blocks[k]}</div>`).join('')}</div>
     <p class="help" style="text-align:center">Hold a chart to move it${ui.chartOrder ? ' · <button class="linkbtn" data-act="resetOrder" style="padding:0;font-size:12.5px">reset order</button>' : ''}</p>`;
   html = html.replace('Hold a chart to move it', 'Tap a bar or point to see the sessions behind it · hold a chart to move it');
   view.innerHTML = html;
   makeSortable(document.getElementById('sortCharts'), keys => { ui.chartOrder = keys; saveUI(); setTimeout(render, 0); });
+}
+const SERIES = ['#2F6FE4','#F0703C','#1baf7a','#4a3aa7'];
+function svgGBars(labels, series, h=170, drill=null){
+  const W = 340, H = h, L = 26, R = 4, T = 10, B = 22, n = labels.length, max = Math.max(1, ...series.flatMap(s => s.vals));
+  const step = niceStep(max), top = Math.ceil(max/step)*step, bw = (W-L-R)/n, y = v => T + (H-T-B)*(1 - v/top);
+  const inner = bw*0.82, sw = inner/series.length;
+  let g = '';
+  for(let v = 0; v <= top + 1e-9; v += step) g += `<line class="grid" x1="${L}" x2="${W-R}" y1="${y(v)}" y2="${y(v)}"/><text class="ax" x="${L-5}" y="${y(v)+3}" text-anchor="end">${v}</text>`;
+  labels.forEach((lab,i) => {
+    series.forEach((s,j) => { const v = s.vals[i]; if(v > 0){ const x0 = L + i*bw + (bw-inner)/2 + j*sw; g += `<rect x="${x0.toFixed(1)}" y="${y(v)}" width="${Math.max(1, sw-1).toFixed(1)}" height="${y(0)-y(v)}" rx="1.5" fill="${s.color}"/>`; } });
+    g += `<text class="ax" x="${L + i*bw + bw/2}" y="${H-6}" text-anchor="middle">${esc(lab)}</text>`;
+  });
+  g += `<line class="base" x1="${L}" x2="${W-R}" y1="${y(0)}" y2="${y(0)}"/>`;
+  if(drill) labels.forEach((_,i) => { if(drill[i] && series.some(s => s.vals[i] > 0)) g += `<rect class="hit" x="${L + i*bw}" y="0" width="${bw}" height="${H}" data-act="drill" data-d="${esc(drill[i])}"/>`; });
+  return `<svg class="chart${drill ? ' tappable' : ''}" viewBox="0 0 ${W} ${H}" role="img">${g}</svg>`;
+}
+const legendFor = S => `<div class="legend">${S.map(x => `<span><i style="--c:${x.color}"></i>${esc(x.t)}</span>`).join('')}</div>`;
+function overlayBlocks(g, tags, tcol){
+  const all = sessOf(g.id).sort((a,b) => a.t - b.t), per = curPeriod(), now = Date.now(), nowK = monthKey(now);
+  const d = new Date(), yr = d.getFullYear();
+  const S = tags.map(t => {
+    const ss = all.filter(s => s.tags.includes(t)), counts = new Map();
+    ss.forEach(s => { const k = monthKey(s.t); counts.set(k, (counts.get(k)||0)+1); });
+    return {t, ss, color: tcol(t), counts, bl: baseline(ss, per), cur: ss.length ? now - ss[ss.length-1].t : null};
+  });
+  const union = all.filter(s => tags.some(t => s.tags.includes(t)));
+  chartCtx = {g, ss: union, what: tags.join(' + '), ctag: null, hl: tags, mixFrom: union, mixLabel: 'all time'};
+  const blocks = {};
+  if(!union.length){ blocks.stats = `<div class="card empty">Nothing logged with these tags yet.</div>`; return blocks; }
+  const last12k = []; for(let k = nowK-11; k <= nowK; k++) last12k.push(k);
+  // side-by-side numbers
+  blocks.stats = `<section class="card">
+    <div class="card-h"><h2>Side by side</h2><span class="sub">gaps: ${esc(per.short)}</span></div>
+    <table class="cmp"><thead><tr><th></th><th>${yr}</th><th>12 mo</th><th>Avg gap</th><th>Now</th></tr></thead><tbody>
+    ${S.map(x => `<tr><td><i style="background:${x.color}"></i>${esc(x.t)}</td><td>${x.ss.filter(s => new Date(s.t).getFullYear() === yr).length}</td><td>${last12k.reduce((a,k) => a + (x.counts.get(k)||0), 0)}</td><td>${x.bl.gaps.length ? daysTxt(x.bl.mean).replace(' days',' d').replace(' day',' d') : '–'}</td><td>${x.cur != null ? daysTxt(x.cur).replace(' days',' d').replace(' day',' d') : '–'}</td></tr>`).join('')}
+    </tbody></table>
+  </section>`;
+  blocks.gaps = `<section class="card">
+    <div class="card-h"><h2>What's normal</h2><span class="sub">each tag vs its own average</span></div>
+    ${periodChips()}
+    <div style="display:grid;gap:10px;margin-top:10px">${S.map(x => `<div><div class="ov-t"><i style="background:${x.color}"></i>${esc(x.t)}${x.cur != null ? ` <span class="muted">· day ${dd(x.cur)}</span>` : ''}</div>${x.cur != null ? normBlock(x.ss, x.color, x.cur) : '<p class="help">Nothing logged yet.</p>'}</div>`).join('')}</div>
+  </section>`;
+  // per month
+  const firstK = Math.min(...S.filter(x => x.ss.length).map(x => monthKey(x.ss[0].t)));
+  const keys = []; for(let k = (ui.crange === '2y' ? Math.max(firstK, nowK-23) : firstK); k <= nowK; k++) keys.push(k);
+  const smooth = ui.ovSmooth !== false;
+  const series = S.map(x => { const raw = keys.map(k => x.counts.get(k) || 0); return {vals: smooth ? raw.map((_,i) => i < 2 ? null : +((raw[i]+raw[i-1]+raw[i-2])/3).toFixed(2)) : raw, color:x.color, w:1.8, dots:!smooth}; });
+  blocks.month = `<section class="card">
+    <div class="card-h"><h2>Per month</h2><span style="display:flex;gap:6px"><span class="seg"><button class="${smooth?'on':''}" data-act="ovsmooth" data-v="1">Avg</button><button class="${!smooth?'on':''}" data-act="ovsmooth" data-v="0">Raw</button></span><span class="seg"><button class="${ui.crange==='2y'?'on':''}" data-act="crange" data-v="2y">2Y</button><button class="${ui.crange==='all'?'on':''}" data-act="crange" data-v="all">All</button></span></span></div>
+    ${svgLine(keys, series, 210, keys.map(k => 'm:'+k))}
+    ${legendFor(S)}${smooth ? '<p class="help" style="margin:4px 0 0">Lines show a 3-month average so they\'re easier to compare.</p>' : ''}
+  </section>`;
+  blocks.last12 = `<section class="card">
+    <div class="card-h"><h2>Last 12 months</h2></div>
+    ${svgGBars(last12k.map(k => MON[k%12][0]), S.map(x => ({vals: last12k.map(k => x.counts.get(k)||0), color:x.color})), 170, last12k.map(k => 'm:'+k))}
+    ${legendFor(S)}
+  </section>`;
+  const ys = [...new Set(union.map(s => new Date(s.t).getFullYear()))].sort();
+  if(ys.length > 1) blocks.year = `<section class="card">
+    <div class="card-h"><h2>By year</h2></div>
+    ${svgGBars(ys.map(y => "'" + String(y).slice(2)), S.map(x => ({vals: ys.map(y => x.ss.filter(s => new Date(s.t).getFullYear() === y).length), color:x.color})), 170, ys.map(y => 'y:'+y))}
+    ${legendFor(S)}
+  </section>`;
+  blocks.dow = `<section class="card">
+    <div class="card-h"><h2>Day of week</h2></div>
+    ${svgGBars(['M','T','W','T','F','S','S'], S.map(x => { const v = [0,0,0,0,0,0,0]; x.ss.forEach(s => v[(new Date(s.t).getDay()+6)%7]++); return {vals:v, color:x.color}; }), 160, [0,1,2,3,4,5,6].map(i => 'dow:'+i))}
+    ${legendFor(S)}
+  </section>`;
+  blocks.tod = `<section class="card">
+    <div class="card-h"><h2>Time of day</h2></div>
+    ${svgGBars(['Night','Morning','Afternoon','Evening'], S.map(x => { const v = [0,0,0,0]; x.ss.forEach(s => v[Math.floor(new Date(s.t).getHours()/6)]++); return {vals:v, color:x.color}; }), 150, [0,1,2,3].map(i => 'tod:'+i))}
+    ${legendFor(S)}
+  </section>`;
+  // how often they happen together
+  const pairs = [];
+  for(let i = 0; i < S.length; i++) for(let j = i+1; j < S.length; j++){
+    const a = S[i], b = S[j], both = union.filter(s => s.tags.includes(a.t) && s.tags.includes(b.t)).length;
+    pairs.push(`<div class="pair-row"><span><i style="background:${a.color}"></i>${esc(a.t)} + <i style="background:${b.color}"></i>${esc(b.t)}</span><span class="mono"><b>${both}</b> together · ${pct(both, a.ss.length)} of ${esc(a.t)} · ${pct(both, b.ss.length)} of ${esc(b.t)}</span></div>`);
+  }
+  const allTogether = S.length > 2 ? union.filter(s => tags.every(t => s.tags.includes(t))).length : null;
+  blocks.mix = `<section class="card">
+    <div class="card-h"><h2>Together</h2><span class="sub">same session</span></div>
+    ${pairs.join('')}${allTogether != null ? `<p class="help" style="margin:6px 0 0">All ${S.length} in one session: <b>${allTogether}</b> times.</p>` : ''}
+  </section>`;
+  return blocks;
 }
 const GAP_BUCKETS = [[0,3,'0–3'],[3,7,'4–7'],[7,14,'1–2w'],[14,21,'2–3w'],[21,31,'3–4w'],[31,Infinity,'4w+']];
 const GAP_NAMES = ['up to 3 days','4–7 days','1–2 weeks','2–3 weeks','3–4 weeks','over 4 weeks'];
@@ -1258,6 +1370,7 @@ function settingsSheet(){
         <div class="srow"><input type="color" value="${g.color}" aria-label="Colour"><input type="text" value="${esc(g.name)}" aria-label="Group name"><button class="x" data-gdel aria-label="Delete group">🗑</button></div>
         <div class="chips wrap">${g.tags.map(t => `<button class="chip" data-tag="${esc(t)}">${esc(t)} <span class="n">${tc.get(t)||0}</span></button>`).join('')}<button class="chip add" data-tadd>+ tag</button></div>
         <label class="chk" style="font-size:13px"><input type="checkbox" data-noall ${g.noAll ? '' : 'checked'}> Show an "All sessions" view in Charts</label>
+        ${db.groups.length > 1 ? `<select data-merge class="merge-sel" aria-label="Merge this group"><option value="">Merge ${esc(g.name)} into…</option>${db.groups.filter(x => x.id !== g.id).map(x => `<option value="${x.id}">${esc(x.name)}</option>`).join('')}</select>` : ''}
       </div>`; }).join('')}
     </div>
     <p class="help">Tap a tag to rename or remove it.</p>
@@ -1313,6 +1426,19 @@ function settingsSheet(){
       const box = ev.target.closest('[data-gid]'); const g = grp(box.dataset.gid);
       if(ev.target.type === 'color') g.color = ev.target.value;
       if(ev.target.type === 'text' && ev.target.value.trim()) g.name = ev.target.value.trim();
+      if(ev.target.hasAttribute('data-merge')){
+        const into = grp(ev.target.value); if(!into) return;
+        const n = sessOf(g.id).length;
+        if(!confirm(`Move all ${n} ${g.name} sessions and their tags into ${into.name}? ${g.name} will then be removed. Sessions and tags stay exactly as they are.`)){ ev.target.value = ''; return; }
+        const name = (prompt('Name for the combined group', into.name) || into.name).trim() || into.name;
+        db.sessions.forEach(s => { if(s.g === g.id) s.g = into.id; });
+        g.tags.forEach(t => ensureTag(into, t));
+        db.counters.forEach(c => { if(c.g === g.id) c.g = into.id; });
+        into.noAll = !!(into.noAll || g.noAll); into.name = name;
+        db.groups = db.groups.filter(x => x !== g);
+        if(ui.cg === g.id) ui.cg = into.id; if(ui.lg === g.id) ui.lg = into.id; ui.ctags = [];
+        sortSessions(); save(); render(); reopen(); toast(`Merged into ${name}`); return;
+      }
       if(ev.target.hasAttribute('data-noall')){ g.noAll = !ev.target.checked; if(g.noAll && ui.cg === g.id) ui.ctag = null; }
       save(); render();
     });
@@ -1517,8 +1643,15 @@ view.addEventListener('click', ev => {
   const a = b.dataset.act, later = () => setTimeout(render, 0);
   if(a === 'add') sessionSheet({g:b.dataset.g, tag:b.dataset.tag || null});
   else if(a === 'edit') sessionSheet({id:b.dataset.id});
-  else if(a === 'cg'){ ui.cg = b.dataset.g; ui.ctag = null; later(); }
-  else if(a === 'ctag'){ ui.ctag = b.dataset.tag || null; later(); }
+  else if(a === 'cg'){ ui.cg = b.dataset.g; ui.ctag = null; ui.ctags = []; later(); }
+  else if(a === 'ctag'){
+    const t = b.dataset.tag, g = grp(ui.cg); ui.ctags = Array.isArray(ui.ctags) ? ui.ctags : [];
+    if(!t) ui.ctags = [];
+    else if(ui.ctags.includes(t)){ if(ui.ctags.length === 1 && g && g.noAll){ toast('Pick another tag first'); return; } ui.ctags = ui.ctags.filter(x => x !== t); }
+    else { if(ui.ctags.length >= 4){ toast('Up to 4 tags at once'); return; } ui.ctags = ui.ctags.concat(t); }
+    later();
+  }
+  else if(a === 'ovsmooth'){ ui.ovSmooth = b.dataset.v === '1'; later(); }
   else if(a === 'crange'){ ui.crange = b.dataset.v; later(); }
   else if(a === 'mix'){ ui.mixRange = b.dataset.v; later(); }
   else if(a === 'lg'){ ui.lg = b.dataset.g; ui.limit = 120; later(); }
