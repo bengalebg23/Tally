@@ -60,6 +60,10 @@
   Hand, #F7F8FA ground, white cards, #2F6FE4 accent).
 
   CHANGELOG
+  v1.6.2 — group.noAll hides the "All sessions" chart view (on by default for
+           the Masterbate group, as porn-only sessions made the total
+           meaningless); charts then default to the group's counter tag.
+           Toggle per group in Settings → Groups & tags. No data removed.
   v1.6.1 — Current gap is compared with the AVERAGE (mean) gap for the chosen
            period: "Under your average · about N days to go" / "N days past
            your average". Bar marker line = average. Stat tiles show
@@ -104,7 +108,7 @@
 <meta name="theme-color" content="#F7F8FA">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Tally">
-<title>Tally v1.6.1</title>
+<title>Tally v1.6.2</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Patrick+Hand&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -303,7 +307,7 @@
   <div class="title-row">
     <h1 class="title">Tally</h1>
     <div class="title-right">
-      <span class="version-badge">v1.6.1</span>
+      <span class="version-badge">v1.6.2</span>
       <button class="icon-btn" id="openSettings" aria-label="Settings">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       </button>
@@ -322,7 +326,7 @@
 
 <script>
 'use strict';
-const VERSION = '1.6.1';
+const VERSION = '1.6.2';
 const STORE_KEY = 'tally.v1';
 const UI_KEY = 'tally.ui';
 const SESSION_WINDOW = 15 * 60000;
@@ -349,7 +353,7 @@ ui.limit = 120; ui.q = '';
 
 function normalize(d){
   d = d && typeof d === 'object' ? d : {};
-  return {groups: Array.isArray(d.groups) ? d.groups.map(g => Object.assign({tags:[]}, g)) : [],
+  return {groups: Array.isArray(d.groups) ? d.groups.map(g => { g = Object.assign({tags:[]}, g); if(g.noAll === undefined) g.noAll = /mast[eu]?rbat/i.test(g.name || ''); return g; }) : [],
           sessions: Array.isArray(d.sessions) ? d.sessions.map(s => Object.assign({tags:[], note:''}, s)).sort((a,b) => b.t - a.t) : [],
           counters: Array.isArray(d.counters) ? d.counters.map(fixCounter).filter(Boolean) : [],
           periods: Array.isArray(d.periods) ? d.periods : []};
@@ -953,10 +957,15 @@ function renderCharts(){
   const g = grp(ui.cg);
   if(ui.ctag && !g.tags.includes(ui.ctag)) ui.ctag = null;
   const tc = tagCounts(g.id);
+  if(g.noAll && !ui.ctag){
+    // this group has no "All sessions" view — default to its counter's tag, else its most-used tag
+    const ctr = db.counters.find(c => c.g === g.id);
+    ui.ctag = (ctr && ctr.tags[0]) || [...tc.entries()].sort((a,b) => b[1]-a[1]).map(x => x[0])[0] || null;
+  }
   const tagList = g.tags.slice().sort((a,b) => (tc.get(b)||0) - (tc.get(a)||0));
   const color = g.color;
   let html = `<div class="chips">${db.groups.map(x => `<button class="chip ${x.id===g.id?'on':''}" style="--c:${x.color}" data-act="cg" data-g="${x.id}"><i></i>${esc(x.name)}</button>`).join('')}</div>
-    <div class="chips"><button class="chip tag ${!ui.ctag?'on':''}" style="--c:${color}" data-act="ctag" data-tag="">All sessions</button>${tagList.map(t => `<button class="chip tag ${ui.ctag===t?'on':''}" style="--c:${color}" data-act="ctag" data-tag="${esc(t)}">${esc(t)} <span class="n">${tc.get(t)||0}</span></button>`).join('')}</div>`;
+    <div class="chips">${g.noAll ? '' : `<button class="chip tag ${!ui.ctag?'on':''}" style="--c:${color}" data-act="ctag" data-tag="">All sessions</button>`}${tagList.map(t => `<button class="chip tag ${ui.ctag===t?'on':''}" style="--c:${color}" data-act="ctag" data-tag="${esc(t)}">${esc(t)} <span class="n">${tc.get(t)||0}</span></button>`).join('')}</div>`;
 
   const all = sessOf(g.id).sort((a,b) => a.t - b.t);
   const ss = ui.ctag ? all.filter(s => s.tags.includes(ui.ctag)) : all;
@@ -1220,6 +1229,7 @@ function settingsSheet(){
       ${db.groups.map(g => { const tc = tagCounts(g.id); return `<div data-gid="${g.id}" style="display:grid;gap:8px">
         <div class="srow"><input type="color" value="${g.color}" aria-label="Colour"><input type="text" value="${esc(g.name)}" aria-label="Group name"><button class="x" data-gdel aria-label="Delete group">🗑</button></div>
         <div class="chips wrap">${g.tags.map(t => `<button class="chip" data-tag="${esc(t)}">${esc(t)} <span class="n">${tc.get(t)||0}</span></button>`).join('')}<button class="chip add" data-tadd>+ tag</button></div>
+        <label class="chk" style="font-size:13px"><input type="checkbox" data-noall ${g.noAll ? '' : 'checked'}> Show an "All sessions" view in Charts</label>
       </div>`; }).join('')}
     </div>
     <p class="help">Tap a tag to rename or remove it.</p>
@@ -1275,6 +1285,7 @@ function settingsSheet(){
       const box = ev.target.closest('[data-gid]'); const g = grp(box.dataset.gid);
       if(ev.target.type === 'color') g.color = ev.target.value;
       if(ev.target.type === 'text' && ev.target.value.trim()) g.name = ev.target.value.trim();
+      if(ev.target.hasAttribute('data-noall')){ g.noAll = !ev.target.checked; if(g.noAll && ui.cg === g.id) ui.ctag = null; }
       save(); render();
     });
     gl.addEventListener('click', ev => {
