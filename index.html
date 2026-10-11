@@ -1,0 +1,1136 @@
+<!DOCTYPE html>
+<!--
+  ═══════════════════════════════════════════════════════════════════════
+  TALLY — HANDOFF NOTES (read this first in any new Claude chat)
+  ═══════════════════════════════════════════════════════════════════════
+
+  WHAT THIS IS
+  A private, single-file PWA that replaces Ben's Track & Graph intimacy
+  logging. Neutral name on purpose so the home-screen icon is discreet.
+
+  DATA MODEL (sessions with tags, not separate trackers)
+  In Track & Graph each "time" was logged by tapping several trackers within
+  the same minute (PIV + B-Orgasm + E-Orgasm + Satisfyer…). Tally stores one
+  SESSION per time, with a set of TAGS, inside a GROUP:
+    db = {
+      groups:   [{id, name, color, tags:[name…]}],     e.g. Sex, Masturbate
+      sessions: [{id, g, t, tags:[name…], note}],      t = epoch ms
+      counters: [{id, name, g, tag|null, color}]       "time since" cards
+    }
+  A counter with tag=null counts every session in its group.
+
+  SECURITY / STORAGE (v1.2.0)
+  - The repo is public and has no sign-in, so the data is END-TO-END
+    ENCRYPTED: a random 48-byte vault secret = 16-byte vault id + 32-byte
+    AES-GCM data key. The whole db is JSON → AES-GCM → {iv, ct, v}.
+  - The vault secret is wrapped with a key derived from the PIN (PBKDF2,
+    310k × SHA-256) and kept in localStorage (VAULT_KEY). The encrypted blob
+    is cached in localStorage (BLOB_KEY) and pushed to Firebase RTDB at
+    vaults/<vault id>. Nothing readable is stored anywhere.
+  - Recovery code = "TALLY1 " + base64url(vault secret) in groups of 8. It
+    adds the vault to a new device or resets a forgotten PIN. Lose both PIN
+    and code → data is unrecoverable (by design).
+  - FIREBASE_CONFIG = {databaseURL, projectId} of tally-85dd6; null → this device only.
+  - Sync: debounced full-blob set(); onValue replaces local if newer, or
+    merges (union by id, local wins) when there are unsynced local edits.
+  - Locks on every launch and after LOCK_AFTER of being in the background.
+    5 wrong PINs → lockout that doubles from 30 s.
+  - RTDB rules for the Tally project (root closed, vault path only):
+      { "rules": { ".read": false, ".write": false,
+          "vaults": { "$vault": { ".read": "$vault.length === 32",
+            ".write": "$vault.length === 32",
+            ".validate": "newData.hasChildren(['iv','ct','v'])" } } } }
+
+  IMPORT (importCSV)
+  - Track & Graph CSV: FeatureName,Timestamp,Value,Label,Note (+ legacy form).
+  - Group = name in the filename ("TrackAndGraph-Sex-2026…csv" → Sex,
+    trailing "_" dropped), or the existing group that already has most of the
+    file's feature names as tags, else asks.
+  - Rows within SESSION_WINDOW (15 min) of a session's start join it, unless
+    that tag is already in it (then a new session starts).
+  - Features whose values aren't 1 (e.g. "Trial", a days-since figure) are
+    skipped — Tally works gaps out itself. Labels become extra tags.
+  - Re-importing skips sessions already present (same group, start minute and tags).
+
+  EXPORT: JSON backup; CSV in Track & Graph format (one row per tag).
+
+  ARCHITECTURE: index.html (vanilla JS, no libraries, hand-drawn SVG charts)
+  + sw.js. Look matches MoneyFlow / MealRota (Inter, IBM Plex Mono, Patrick
+  Hand, #F7F8FA ground, white cards, #2F6FE4 accent).
+
+  CHANGELOG
+  v1.2.1 — Connected to Firebase project tally-85dd6 (RTDB europe-west1).
+  v1.2.0 — End-to-end encrypted vault with PIN lock, recovery code and
+           Firebase RTDB sync. Plain v1.1 local data is migrated into the
+           vault and the plaintext copy deleted. Settings: lock now, change
+           PIN, show recovery code, remove from device.
+  v1.1.0 — Rebuilt around sessions + tags + groups after seeing the real
+           exports. Now = counter cards (time since, last session's tags);
+           Charts per group with tag filter, tag mix / "often with" card;
+           Log shows sessions with tag chips; one-tap multi-tag logging;
+           Settings manages groups, tags and counters.
+  v1.0.0 — First version (one entry per tracker). Never deployed.
+  ═══════════════════════════════════════════════════════════════════════
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#F7F8FA">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Tally">
+<title>Tally v1.2.1</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Patrick+Hand&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#F7F8FA; --surface:#FFFFFF; --surface-2:#EEF1F5; --line:#D7DCE3;
+    --paper:#26313F; --paper-dim:#5b6b7d; --muted:#6b7a8c;
+    --mustard:#2F6FE4; --mustard-dim:#1f4fb0; --rose:#F0703C; --today:#2FA84F; --gap:#e34948;
+    --radius:14px;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  [hidden]{display:none !important;}
+  html,body{margin:0;padding:0;}
+  body{background:var(--bg); color:var(--paper); font-family:'Inter',system-ui,sans-serif; min-height:100vh; padding-bottom:110px;}
+  @media (prefers-reduced-motion: reduce){ *{animation-duration:0.001ms !important; transition-duration:0.001ms !important;} }
+
+  header.top{
+    padding:calc(14px + env(safe-area-inset-top,0px)) 18px 10px;
+    border-bottom:1px solid var(--line); position:sticky; top:0; z-index:20;
+    background:linear-gradient(180deg, var(--bg) 80%, transparent); backdrop-filter:blur(6px);
+  }
+  .eyebrow{font-family:'IBM Plex Mono',monospace; font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--muted); margin:0 0 2px;}
+  h1.title{font-family:'Patrick Hand',cursive; font-size:28px; margin:0; font-weight:400;}
+  .title-row{display:flex; align-items:center; justify-content:space-between; gap:10px; margin:0 0 9px;}
+  .title-right{display:flex; align-items:center; gap:8px;}
+  .version-badge{flex:none; font-size:11px; font-weight:600; color:var(--mustard); background:var(--surface); border:1px solid var(--mustard-dim); padding:4px 9px; border-radius:20px;}
+  .icon-btn{width:34px; height:34px; border-radius:9px; border:1px solid var(--line); background:var(--surface); color:var(--paper); cursor:pointer; display:grid; place-items:center; padding:0;}
+  .icon-btn svg{width:18px; height:18px;}
+  .tabs{display:flex; gap:5px;}
+  .tab{flex:1; text-align:center; padding:7px 0 6px; border-radius:9px; background:var(--surface); border:1px solid var(--line);
+    font-family:'IBM Plex Mono',monospace; font-size:13px; font-weight:600; color:var(--paper-dim); cursor:pointer; transition:background .15s,color .15s;}
+  .tab.active{background:var(--mustard); color:#fff; border-color:var(--mustard);}
+  button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible{outline:2px solid var(--mustard); outline-offset:2px;}
+
+  main{max-width:720px; margin:0 auto; padding:16px 18px 0; display:grid; gap:14px;}
+  .card{background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:14px; position:relative; min-width:0;}
+  .card-h{display:flex; justify-content:space-between; align-items:baseline; gap:8px; margin:0 0 10px;}
+  .card-h h2{font-family:'Patrick Hand',cursive; font-weight:400; font-size:22px; margin:0; line-height:1.1;}
+  .card-h .sub{font-size:12px; color:var(--muted); text-align:right;}
+
+  /* Now tab */
+  .ctr{display:grid; gap:6px; padding:14px 14px 12px; border-left:5px solid var(--c,var(--mustard));}
+  .ctr-top{display:flex; justify-content:space-between; align-items:center; gap:8px;}
+  .ctr-name{font-family:'Patrick Hand',cursive; font-size:23px; line-height:1;}
+  .ctr-name small{font-family:'IBM Plex Mono',monospace; font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); margin-left:6px;}
+  .since{font-family:'IBM Plex Mono',monospace; font-weight:600; font-size:clamp(22px,6.4vw,30px); font-variant-numeric:tabular-nums; letter-spacing:-.01em;}
+  .since .u{font-size:.55em; font-weight:500; color:var(--paper-dim); margin:0 6px 0 2px;}
+  .last{font-size:12.5px; color:var(--paper-dim);}
+  .meta{display:flex; flex-wrap:wrap; gap:4px 14px; font-size:11px; color:var(--muted); font-family:'IBM Plex Mono',monospace;}
+  .meta b{color:var(--paper); font-weight:600;}
+  .plus{width:40px; height:40px; border-radius:11px; border:none; background:var(--c,var(--mustard)); color:#fff; font:600 24px 'Inter',sans-serif; cursor:pointer; flex:none; line-height:1;}
+  .mini-tags{display:flex; flex-wrap:wrap; gap:4px;}
+  .mt{font-size:11px; padding:2px 7px; border-radius:6px; background:var(--surface-2); color:var(--paper-dim);}
+  .mt.hl{background:var(--c); color:#fff;}
+  .empty{padding:26px 16px; text-align:center; color:var(--paper-dim); font-size:14px; display:grid; gap:12px; justify-items:center;}
+
+  /* chips */
+  .chips{display:flex; gap:6px; overflow-x:auto; padding-bottom:2px; scrollbar-width:none;}
+  .chips::-webkit-scrollbar{display:none;}
+  .chips.wrap{flex-wrap:wrap; overflow:visible;}
+  .chip{flex:none; font:600 12.5px 'Inter',sans-serif; padding:6px 11px; border-radius:20px; border:1px solid var(--line); background:var(--surface); color:var(--paper-dim); cursor:pointer; display:inline-flex; align-items:center; gap:6px;}
+  .chip i{width:8px; height:8px; border-radius:50%; background:var(--c);}
+  .chip.on{background:var(--paper); border-color:var(--paper); color:#fff;}
+  .chip.tag.on{background:var(--c); border-color:var(--c);}
+  .chip.add{border-style:dashed;}
+  .chip .n{font-family:'IBM Plex Mono',monospace; font-size:10.5px; opacity:.7; font-weight:500;}
+
+  /* charts */
+  .stats{display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px;}
+  @media (min-width:560px){ .stats{grid-template-columns:repeat(4,minmax(0,1fr));} }
+  .stat{background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:10px 12px; display:grid; gap:2px; min-width:0;}
+  .stat .k{font-family:'IBM Plex Mono',monospace; font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--muted);}
+  .stat .v{font-family:'IBM Plex Mono',monospace; font-weight:600; font-size:22px; font-variant-numeric:tabular-nums;}
+  .stat .s{font-size:11.5px; color:var(--paper-dim);}
+  svg.chart{display:block; width:100%; height:auto; overflow:visible;}
+  .ax{font:10px 'IBM Plex Mono',monospace; fill:var(--muted);}
+  .grid{stroke:var(--surface-2); stroke-width:1;}
+  .base{stroke:var(--line); stroke-width:1;}
+  .legend{display:flex; flex-wrap:wrap; gap:4px 14px; font-size:11.5px; color:var(--paper-dim); margin-top:6px;}
+  .legend span{display:inline-flex; align-items:center; gap:6px;}
+  .legend i{width:14px; height:3px; border-radius:2px; display:inline-block; background:var(--c);}
+  .legend i.dash{background:repeating-linear-gradient(90deg,var(--c) 0 4px,transparent 4px 7px);}
+  .hbar{display:grid; grid-template-columns:minmax(110px,1.3fr) 2fr 44px; gap:8px; align-items:center; font-size:12.5px; margin:5px 0;}
+  .hbar .bar{height:10px; border-radius:5px; background:var(--surface-2); overflow:hidden;}
+  .hbar .bar i{display:block; height:100%; background:var(--c); border-radius:5px;}
+  .hbar .n{text-align:right; font-family:'IBM Plex Mono',monospace; font-size:12px;}
+  .hbar .nm{overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .seg{display:inline-flex; border:1px solid var(--line); border-radius:8px; overflow:hidden;}
+  .seg button{font:600 11px 'IBM Plex Mono',monospace; padding:4px 8px; border:0; background:var(--surface); color:var(--paper-dim); cursor:pointer;}
+  .seg button.on{background:var(--paper); color:#fff;}
+
+  /* log */
+  .search{width:100%; font:inherit; font-size:14px; padding:9px 12px; border-radius:10px; border:1px solid var(--line); background:var(--surface); color:var(--paper);}
+  .month-h{font-family:'IBM Plex Mono',monospace; font-size:10.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); margin:6px 2px -4px; display:flex; justify-content:space-between;}
+  .rows{background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); overflow:hidden;}
+  .row{display:grid; grid-template-columns:4px minmax(0,1fr) auto; gap:10px; align-items:center; padding:10px 12px 10px 0; border-top:1px solid var(--surface-2); cursor:pointer; width:100%; background:none; border-left:0; border-right:0; border-bottom:0; text-align:left; font:inherit; color:inherit;}
+  .row:first-child{border-top:0;}
+  .row > i{align-self:stretch; background:var(--c); border-radius:0 3px 3px 0;}
+  .row .nm{font-weight:600; font-size:13.5px; margin-bottom:4px;}
+  .row .nt{font-size:11.5px; color:var(--paper-dim); margin-top:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .row .dt{font-family:'IBM Plex Mono',monospace; font-size:12px; color:var(--paper-dim); text-align:right; line-height:1.35;}
+  .more{justify-self:center;}
+
+  /* buttons, sheets */
+  .btn{font:inherit; font-size:13.5px; font-weight:600; padding:9px 14px; border-radius:10px; border:1px solid var(--line); background:var(--surface); color:var(--paper); cursor:pointer;}
+  .btn.primary{background:var(--mustard); border-color:var(--mustard); color:#fff;}
+  .btn.danger{color:var(--gap); border-color:#f1c2c2;}
+  .btn.block{width:100%;}
+  .btn.sm{font-size:12.5px; padding:6px 10px;}
+  .btns{display:flex; gap:8px; flex-wrap:wrap;}
+  .fab{position:fixed; right:18px; bottom:calc(20px + env(safe-area-inset-bottom,0px)); width:58px; height:58px; border-radius:17px; border:none; background:var(--mustard); color:#fff; font:500 30px 'Inter',sans-serif; box-shadow:0 6px 18px rgba(47,111,228,.35); cursor:pointer; z-index:40;}
+  .scrim{position:fixed; inset:0; background:rgba(38,49,63,.35); z-index:50;}
+  .sheet{position:fixed; left:50%; bottom:0; transform:translateX(-50%); width:min(560px,100%); max-height:90vh; overflow:auto; background:var(--surface); border-radius:18px 18px 0 0; padding:16px 18px calc(22px + env(safe-area-inset-bottom,0px)); z-index:51; box-shadow:0 -8px 30px rgba(38,49,63,.18); display:grid; gap:14px;}
+  .sheet-head{display:flex; justify-content:space-between; align-items:center; gap:10px;}
+  .sheet h3{margin:0; font-family:'Patrick Hand',cursive; font-size:26px; font-weight:400; line-height:1.1;}
+  .x{border:1px solid var(--line); background:var(--surface-2); border-radius:9px; width:32px; height:32px; cursor:pointer; color:var(--paper); font-size:14px; flex:none;}
+  .x:disabled{opacity:.35; cursor:default;}
+  .field{display:grid; gap:5px;}
+  .field > span, .lbl{font-family:'IBM Plex Mono',monospace; font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--muted);}
+  .field input, .field select, .field textarea{font:inherit; font-size:15px; padding:9px 11px; border-radius:10px; border:1px solid var(--line); background:var(--surface); color:var(--paper); width:100%; min-width:0;}
+  .field textarea{min-height:56px; resize:vertical;}
+  .tagsec{display:grid; gap:6px;}
+  .sec{font-family:'IBM Plex Mono',monospace; font-size:10.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); margin:6px 0 -6px; border-top:1px solid var(--surface-2); padding-top:12px;}
+  .srow{display:grid; grid-template-columns:34px minmax(0,1fr) auto; gap:8px; align-items:center;}
+  .srow input[type=color]{width:34px; height:34px; padding:0; border:1px solid var(--line); border-radius:9px; background:none;}
+  .srow input[type=text], .srow select{font:inherit; font-size:14px; padding:7px 10px; border-radius:9px; border:1px solid var(--line); min-width:0; background:var(--surface); color:var(--paper); width:100%;}
+  .srow .pair{display:grid; grid-template-columns:1fr 1fr; gap:6px; min-width:0;}
+  .help{font-size:12.5px; color:var(--paper-dim); margin:0; line-height:1.45;}
+  /* lock / setup */
+  body.locked header.top, body.locked main, body.locked .fab{display:none !important;}
+  #lock{position:fixed; inset:0; z-index:80; background:var(--bg); overflow:auto; display:flex; flex-direction:column; align-items:center; padding:calc(40px + env(safe-area-inset-top,0px)) 22px calc(24px + env(safe-area-inset-bottom,0px));}
+  .lk{width:100%; max-width:360px; display:grid; gap:16px; justify-items:center; text-align:center;}
+  .lk-logo{width:56px; height:56px; border-radius:15px;}
+  .lk h2{font-family:'Patrick Hand',cursive; font-weight:400; font-size:30px; margin:0; line-height:1.1;}
+  .lk p{margin:0; font-size:13.5px; color:var(--paper-dim); line-height:1.5;}
+  .lk .err{color:var(--gap); font-weight:600; min-height:1.3em;}
+  .dots{display:flex; gap:12px; min-height:16px; justify-content:center;}
+  .dots i{width:14px; height:14px; border-radius:50%; border:2px solid var(--paper-dim);}
+  .dots i.f{background:var(--paper); border-color:var(--paper);}
+  .dots.shake{animation:shake .35s;}
+  @keyframes shake{20%,60%{transform:translateX(-8px)} 40%,80%{transform:translateX(8px)}}
+  .pad{display:grid; grid-template-columns:repeat(3,72px); gap:14px; justify-content:center; margin-top:4px;}
+  .pad button{width:72px; height:72px; border-radius:50%; border:1px solid var(--line); background:var(--surface); color:var(--paper); font:500 26px 'IBM Plex Mono',monospace; cursor:pointer; box-shadow:0 1px 3px rgba(38,49,63,.06);}
+  .pad button:active{background:var(--surface-2);}
+  .pad button.k{border:none; background:none; box-shadow:none; font-size:20px; color:var(--paper-dim);}
+  .pad button.ok{background:var(--mustard); color:#fff; border-color:var(--mustard); font-size:22px;}
+  .pad button:disabled{opacity:.3;}
+  .code{font-family:'IBM Plex Mono',monospace; font-size:14.5px; line-height:1.7; letter-spacing:.02em; background:var(--surface); border:1px dashed var(--mustard-dim); border-radius:12px; padding:12px 14px; word-break:break-all; user-select:all; -webkit-user-select:all; width:100%; text-align:left;}
+  .lk textarea{width:100%; min-height:92px; font:14px 'IBM Plex Mono',monospace; padding:10px 12px; border-radius:12px; border:1px solid var(--line); background:var(--surface); color:var(--paper); resize:vertical;}
+  .lk .btn{width:100%;}
+  .linkbtn{background:none; border:none; color:var(--mustard); font:600 13.5px 'Inter',sans-serif; cursor:pointer; padding:6px;}
+  .chk{display:flex; gap:9px; align-items:flex-start; text-align:left; font-size:13.5px; color:var(--paper);}
+  .chk input{width:18px; height:18px; accent-color:var(--mustard); margin-top:1px; flex:none;}
+  .toast{position:fixed; left:50%; bottom:calc(92px + env(safe-area-inset-bottom,0px)); transform:translateX(-50%); background:var(--paper); color:#fff; font-size:13.5px; padding:10px 14px; border-radius:11px; z-index:90; display:flex; gap:14px; align-items:center; box-shadow:0 6px 18px rgba(38,49,63,.25); max-width:calc(100% - 36px);}
+  .toast button{background:none; border:none; color:#9fc0ff; font:600 13.5px 'Inter',sans-serif; cursor:pointer; padding:0;}
+</style>
+</head>
+<body>
+<header class="top">
+  <p class="eyebrow" id="syncLine">Encrypted</p>
+  <div class="title-row">
+    <h1 class="title">Tally</h1>
+    <div class="title-right">
+      <span class="version-badge">v1.2.1</span>
+      <button class="icon-btn" id="openSettings" aria-label="Settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
+    </div>
+  </div>
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-tab="now" role="tab">Now</button>
+    <button class="tab" data-tab="charts" role="tab">Charts</button>
+    <button class="tab" data-tab="log" role="tab">Log</button>
+  </nav>
+</header>
+
+<main id="view"></main>
+<button class="fab" id="fab" aria-label="Log a session">+</button>
+<input type="file" id="fileIn" accept=".csv,.json,text/csv,application/json" multiple hidden>
+
+<script>
+'use strict';
+const VERSION = '1.2.1';
+const STORE_KEY = 'tally.v1';
+const UI_KEY = 'tally.ui';
+const SESSION_WINDOW = 15 * 60000;
+const PALETTE = ['#2F6FE4','#e34948','#1baf7a','#eda100','#e87ba4','#4a3aa7','#F0703C','#0f9bb5'];
+const DAY = 86400000;
+
+/* ───────── data ───────── */
+// Tally Firebase project (RTDB only needs databaseURL). Set to null to run on this device only.
+const FIREBASE_CONFIG = {
+  databaseURL: 'https://tally-85dd6-default-rtdb.europe-west1.firebasedatabase.app',
+  projectId: 'tally-85dd6'
+};
+const FB_SDK = '10.7.1';
+const VAULT_KEY = 'tally.vault';   // PIN-wrapped vault secret
+const BLOB_KEY = 'tally.blob';     // encrypted db cache {iv, ct, v}
+const FAIL_KEY = 'tally.fails';
+const LOCK_AFTER = 60000;
+const PBKDF2_ITER = 310000;
+
+const emptyDb = () => ({groups:[], sessions:[], counters:[]});
+let db = emptyDb();
+let ui = Object.assign({tab:'now', cg:null, ctag:null, crange:'all', mixRange:'12m', lg:'all', q:'', limit:120}, loadUI());
+ui.limit = 120; ui.q = '';
+
+function normalize(d){
+  d = d && typeof d === 'object' ? d : {};
+  return {groups: Array.isArray(d.groups) ? d.groups.map(g => Object.assign({tags:[]}, g)) : [],
+          sessions: Array.isArray(d.sessions) ? d.sessions.map(s => Object.assign({tags:[], note:''}, s)).sort((a,b) => b.t - a.t) : [],
+          counters: Array.isArray(d.counters) ? d.counters : []};
+}
+function loadUI(){ try{ return JSON.parse(localStorage.getItem(UI_KEY)) || {}; }catch(e){ return {}; } }
+// UI state is not encrypted, so it never stores tag names
+function saveUI(){ try{ localStorage.setItem(UI_KEY, JSON.stringify({tab:ui.tab, cg:ui.cg, crange:ui.crange, mixRange:ui.mixRange, lg:ui.lg})); }catch(e){} }
+
+/* ───────── crypto ───────── */
+const te = new TextEncoder(), td = new TextDecoder();
+function b64(buf){ const u = new Uint8Array(buf); let s = ''; for(let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i+0x8000)); return btoa(s); }
+const unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+const b64url = u => b64(u).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+const unb64url = s => unb64(s.replace(/-/g,'+').replace(/_/g,'/') + '==='.slice((s.length+3)%4));
+const hex = u => [...u].map(b => b.toString(16).padStart(2,'0')).join('');
+async function pinKey(pin, salt){
+  const base = await crypto.subtle.importKey('raw', te.encode(pin), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({name:'PBKDF2', salt, iterations:PBKDF2_ITER, hash:'SHA-256'}, base, {name:'AES-GCM', length:256}, false, ['encrypt','decrypt']);
+}
+async function aesEnc(key, bytes){ const iv = crypto.getRandomValues(new Uint8Array(12)); const ct = await crypto.subtle.encrypt({name:'AES-GCM', iv}, key, bytes); return {iv:b64(iv), ct:b64(ct)}; }
+async function aesDec(key, o){ return new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM', iv:unb64(o.iv)}, key, unb64(o.ct))); }
+async function openVault(raw){ return {raw, vid: hex(raw.slice(0,16)), key: await crypto.subtle.importKey('raw', raw.slice(16), 'AES-GCM', false, ['encrypt','decrypt'])}; }
+function recoveryCode(raw){ return 'TALLY1 ' + b64url(raw).match(/.{1,8}/g).join(' '); }
+function parseRecovery(text){
+  const t = String(text||'').replace(/^\s*TALLY1/i, '').replace(/\s+/g, '');
+  if(!/^[A-Za-z0-9_-]{64}$/.test(t)) return null;
+  try{ const raw = unb64url(t); return raw.length === 48 ? raw : null; }catch(e){ return null; }
+}
+async function wrapVault(raw, pin){
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const o = await aesEnc(await pinKey(pin, salt), raw);
+  localStorage.setItem(VAULT_KEY, JSON.stringify({vid:hex(raw.slice(0,16)), salt:b64(salt), iv:o.iv, ct:o.ct, n:pin.length}));
+}
+const vaultRec = () => { try{ return JSON.parse(localStorage.getItem(VAULT_KEY)); }catch(e){ return null; } };
+
+/* ───────── vault state + sync ───────── */
+let V = null;              // unlocked vault {raw, vid, key}
+let lastV = 0, dirty = false, pendingBlob = null, pushT = null, saveSeq = Promise.resolve();
+let fbApp = null, fbRef = null, fbConn = null, online = null, pendingRender = false;
+
+function save(){
+  if(!V) return;
+  dirty = true; lastV = Date.now();
+  const snap = JSON.stringify(db), v = lastV, vault = V;
+  setSync();
+  saveSeq = saveSeq.then(async () => {
+    const o = await aesEnc(vault.key, te.encode(snap)); o.v = v;
+    try{ localStorage.setItem(BLOB_KEY, JSON.stringify(o)); }catch(e){ toast('Could not save on this device — storage full?'); }
+    pendingBlob = o; schedulePush();
+  }).catch(e => toast('Encryption failed: ' + e.message));
+}
+function schedulePush(){ clearTimeout(pushT); pushT = setTimeout(push, 700); }
+async function push(){
+  if(!fbRef || !pendingBlob) { if(!fbRef) setSync(); return; }
+  const o = pendingBlob;
+  try{ await fbRef.set(o); if(pendingBlob === o){ pendingBlob = null; dirty = false; } setSync(); }
+  catch(e){ setSync('Sync error — ' + e.message); }
+}
+function setSync(err){
+  const el = document.getElementById('syncLine'); if(!el) return;
+  let t = 'Encrypted';
+  if(err) t += ' · ' + err;
+  else if(!FIREBASE_CONFIG) t += ' · this device only';
+  else if(!fbRef) t += ' · connecting…';
+  else if(online === false) t += dirty ? ' · offline, will sync' : ' · offline';
+  else t += dirty ? ' · syncing…' : ' · synced';
+  el.textContent = t;
+}
+function mergeDb(local, remote){
+  const byId = (a, b) => { const m = new Map(); b.forEach(x => m.set(x.id, x)); a.forEach(x => m.set(x.id, x)); return [...m.values()]; };
+  const out = normalize({groups: byId(local.groups, remote.groups), sessions: byId(local.sessions, remote.sessions), counters: local.counters.length ? local.counters : remote.counters});
+  out.groups.forEach(g => { const rg = remote.groups.find(x => x.id === g.id); if(rg) rg.tags.forEach(t => ensureTag(g, t)); });
+  return out;
+}
+async function onRemote(snap){
+  const o = snap.val(), vault = V; if(!vault) return;
+  if(!o || !o.ct){ if(db.groups.length || db.sessions.length){ dirty = true; pendingBlob = null; save(); } return; }
+  if(o.v <= lastV) return;
+  try{
+    const remote = normalize(JSON.parse(td.decode(await aesDec(vault.key, o))));
+    if(vault !== V) return;
+    if(dirty){ db = mergeDb(db, remote); save(); }
+    else { db = remote; lastV = o.v; try{ localStorage.setItem(BLOB_KEY, JSON.stringify(o)); }catch(e){} }
+    refresh(); setSync();
+  }catch(e){ setSync('synced data could not be decrypted'); }
+}
+function refresh(){ if(sheetEl) pendingRender = true; else render(); }
+function loadScript(src){ return new Promise((res, rej) => { if(document.querySelector(`script[src="${src}"]`)) return res(); const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = () => rej(new Error('could not load Firebase')); document.head.append(s); }); }
+async function startSync(){
+  setSync();
+  if(!FIREBASE_CONFIG || !V) return;
+  try{
+    if(!window.firebase || !firebase.database){
+      await loadScript(`https://www.gstatic.com/firebasejs/${FB_SDK}/firebase-app-compat.js`);
+      await loadScript(`https://www.gstatic.com/firebasejs/${FB_SDK}/firebase-database-compat.js`);
+    }
+    fbApp = fbApp || (firebase.apps.length ? firebase.app() : firebase.initializeApp(FIREBASE_CONFIG));
+    const dbase = fbApp.database();
+    fbConn = dbase.ref('.info/connected'); fbConn.on('value', s => { online = !!s.val(); setSync(); if(online && pendingBlob) schedulePush(); });
+    fbRef = dbase.ref('vaults/' + V.vid);
+    fbRef.on('value', onRemote, err => setSync('Sync error — ' + err.message));
+    if(pendingBlob) schedulePush();
+  }catch(e){ fbRef = null; setSync('offline (' + e.message + ')'); }
+}
+function stopSync(){ if(fbRef) fbRef.off(); if(fbConn) fbConn.off(); fbRef = null; fbConn = null; }
+
+/* ───────── lock / setup screens ───────── */
+const lockEl = document.createElement('div'); lockEl.id = 'lock'; lockEl.hidden = true;
+const LOGO = `<svg class="lk-logo" viewBox="0 0 512 512"><rect width="512" height="512" rx="112" fill="#2F6FE4"/><g stroke="#fff" stroke-width="34" stroke-linecap="round"><line x1="150" y1="150" x2="150" y2="362"/><line x1="222" y1="150" x2="222" y2="362"/><line x1="294" y1="150" x2="294" y2="362"/><line x1="366" y1="150" x2="366" y2="362"/><line x1="110" y1="330" x2="404" y2="190"/></g></svg>`;
+function showLock(html){ document.onkeydown = null; document.body.classList.add('locked'); lockEl.hidden = false; lockEl.innerHTML = `<div class="lk">${html}</div>`; lockEl.scrollTop = 0; return lockEl.firstChild; }
+function hideLock(){ document.onkeydown = null; document.body.classList.remove('locked'); lockEl.hidden = true; lockEl.innerHTML = ''; }
+
+// A PIN pad. len = fixed length (auto-submits) or null (4–8 digits with ✓).
+function pinScreen({title, sub = '', len = null, extra = '', onPin}){
+  const box = showLock(`${LOGO}<h2>${esc(title)}</h2>${sub ? `<p>${sub}</p>` : ''}
+    <div class="dots" aria-live="polite"></div><p class="err" role="alert"></p>
+    <div class="pad">${[1,2,3,4,5,6,7,8,9].map(n => `<button data-d="${n}">${n}</button>`).join('')}
+      <button class="k" data-back aria-label="Delete">⌫</button><button data-d="0">0</button>
+      ${len ? '<span></span>' : '<button class="ok" data-ok aria-label="Done">✓</button>'}</div>${extra}`);
+  let pin = '', busy = false;
+  const dots = box.querySelector('.dots'), err = box.querySelector('.err');
+  const draw = () => { const n = len || Math.max(4, pin.length); dots.innerHTML = Array.from({length:n}, (_,i) => `<i class="${i < pin.length ? 'f' : ''}"></i>`).join(''); const ok = box.querySelector('[data-ok]'); if(ok) ok.disabled = pin.length < 4; };
+  const fail = msg => { err.textContent = msg; dots.classList.remove('shake'); void dots.offsetWidth; dots.classList.add('shake'); pin = ''; draw(); };
+  const submit = async () => {
+    if(busy || pin.length < 4) return; busy = true; err.textContent = '…';
+    const msg = await onPin(pin); busy = false;
+    if(msg && lockEl.contains(box)) fail(msg);
+  };
+  const press = k => {
+    if(busy) return; err.textContent = err.textContent === '…' ? '' : err.textContent;
+    if(k === 'back') pin = pin.slice(0,-1);
+    else if(k === 'ok') return submit();
+    else if(pin.length < (len || 8)) pin += k;
+    draw(); if(len && pin.length === len) submit();
+  };
+  box.querySelector('.pad').addEventListener('click', ev => { const b = ev.target.closest('button'); if(!b) return; press(b.dataset.d ?? (b.hasAttribute('data-back') ? 'back' : 'ok')); });
+  document.onkeydown = ev => { if(!lockEl.contains(box)) return; if(/^\d$/.test(ev.key)) press(ev.key); else if(ev.key === 'Backspace') press('back'); else if(ev.key === 'Enter') press('ok'); };
+  draw(); return box;
+}
+function choosePin(title, sub, done){
+  pinScreen({title, sub: sub || 'Pick a 4–8 digit PIN. Six or more is stronger.', onPin: async p1 => {
+    pinScreen({title:'Confirm PIN', sub:'Enter it again.', len:p1.length, onPin: async p2 => {
+      if(p2 !== p1){ setTimeout(() => choosePin(title, 'Those didn\'t match — try again.', done), 600); return 'PINs didn\'t match'; }
+      await done(p1); return null;
+    }});
+    return null;
+  }});
+}
+function welcomeScreen(){
+  const box = showLock(`${LOGO}<h2>Set up Tally</h2>
+    <p>Everything is encrypted on this phone before it's stored${FIREBASE_CONFIG ? ' or synced' : ''}. You'll pick a PIN to open it, and get a recovery code for adding another device or if you forget the PIN.</p>
+    ${FIREBASE_CONFIG ? '' : '<p style="color:var(--rose)">Sync isn\'t set up yet — data stays on this device until it is.</p>'}
+    <button class="btn primary" data-new>Start a new Tally</button>
+    <button class="btn" data-join>I have a recovery code</button>`);
+  box.querySelector('[data-new]').onclick = () => choosePin('Choose a PIN', '', async pin => {
+    const raw = crypto.getRandomValues(new Uint8Array(48));
+    await wrapVault(raw, pin);
+    V = await openVault(raw); localStorage.removeItem(BLOB_KEY);
+    migratePlain();
+    showRecovery(true);
+  });
+  box.querySelector('[data-join]').onclick = () => joinScreen(false);
+}
+function joinScreen(fromLock){
+  const box = showLock(`${LOGO}<h2>${fromLock ? 'Reset PIN' : 'Add this device'}</h2>
+    <p>Paste your recovery code (it starts TALLY1).${fromLock ? ' Your data stays as it is; you\'ll choose a new PIN.' : ''}</p>
+    <textarea id="rc" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="TALLY1 xxxxxxxx xxxxxxxx …"></textarea>
+    <p class="err"></p>
+    <button class="btn primary" data-go>Continue</button>
+    <button class="linkbtn" data-back>Back</button>`);
+  box.querySelector('[data-back]').onclick = () => vaultRec() ? lockScreen() : welcomeScreen();
+  box.querySelector('[data-go]').onclick = () => {
+    const raw = parseRecovery(box.querySelector('#rc').value);
+    if(!raw){ box.querySelector('.err').textContent = 'That doesn\'t look like a full recovery code.'; return; }
+    const cur = vaultRec();
+    choosePin('New PIN', '', async pin => {
+      const nv = await openVault(raw);
+      const switching = !cur || (cur.vid ? cur.vid !== nv.vid : !V || V.vid !== nv.vid);
+      await wrapVault(raw, pin); localStorage.removeItem(FAIL_KEY);
+      if(switching){ localStorage.removeItem(BLOB_KEY); db = emptyDb(); lastV = 0; dirty = false; pendingBlob = null; }
+      V = nv; await afterUnlock(); migratePlain(); toast(FIREBASE_CONFIG ? 'Unlocked — fetching your data' : 'Unlocked');
+    });
+  };
+}
+function showRecovery(first){
+  const code = recoveryCode(V.raw);
+  const box = showLock(`${LOGO}<h2>Your recovery code</h2>
+    <p>Save this somewhere private — a password manager is ideal. It's the only way to add another device or get back in if you forget your PIN. Anyone with it can read your data, so don't share it.</p>
+    <div class="code">${code.split(' ').map(w => `<span style="display:inline-block;margin-right:.6em">${esc(w)}</span>`).join('')}</div>
+    <button class="btn" data-copy>Copy code</button>
+    ${first ? `<label class="chk"><input type="checkbox" id="saved"> I've saved it somewhere safe</label>` : ''}
+    <button class="btn primary" data-done ${first ? 'disabled' : ''}>${first ? 'Continue' : 'Done'}</button>`);
+  box.querySelector('[data-copy]').onclick = async () => { try{ await navigator.clipboard.writeText(code); toast('Copied'); }catch(e){ toast('Copy failed — select the code and copy it'); } };
+  const done = box.querySelector('[data-done]');
+  if(first) box.querySelector('#saved').onchange = ev => done.disabled = !ev.target.checked;
+  done.onclick = () => first ? afterUnlock() : (hideLock(), render());
+}
+function failState(){ try{ return JSON.parse(localStorage.getItem(FAIL_KEY)) || {n:0, until:0}; }catch(e){ return {n:0, until:0}; } }
+function lockScreen(msg){
+  const rec = vaultRec(); if(!rec) return welcomeScreen();
+  const box = pinScreen({title:'Tally', sub: msg || 'Enter your PIN', len: rec.n, extra:'<button class="linkbtn" data-forgot>Forgot PIN?</button>', onPin: async pin => {
+    const f = failState(), now = Date.now();
+    if(f.until > now) return `Too many tries — wait ${Math.ceil((f.until-now)/1000)} s`;
+    try{
+      const raw = await aesDec(await pinKey(pin, unb64(rec.salt)), rec);
+      localStorage.removeItem(FAIL_KEY);
+      V = await openVault(raw); await afterUnlock(); return null;
+    }catch(e){
+      f.n++; if(f.n >= 5) f.until = now + 30000 * Math.pow(2, f.n - 5);
+      localStorage.setItem(FAIL_KEY, JSON.stringify(f));
+      return f.until > now ? `Wrong PIN — locked for ${Math.ceil((f.until-now)/1000)} s` : 'Wrong PIN';
+    }
+  }});
+  box.querySelector('[data-forgot]').onclick = () => joinScreen(true);
+}
+async function afterUnlock(){
+  // load the encrypted local copy, then go live
+  if(!lastV){
+    try{ const o = JSON.parse(localStorage.getItem(BLOB_KEY)); if(o && o.ct){ db = normalize(JSON.parse(td.decode(await aesDec(V.key, o)))); lastV = o.v || 1; } }
+    catch(e){ toast('Local copy could not be read — will use synced data'); }
+  }
+  hideLock(); render(); startSync();
+}
+function migratePlain(){
+  // v1.1 kept plain JSON in STORE_KEY — move it into the vault and delete it
+  const plain = localStorage.getItem(STORE_KEY); if(!plain) return;
+  try{ const d = normalize(JSON.parse(plain)); if(d.sessions.length || d.groups.length){ db = db.sessions.length ? mergeDb(d, db) : d; save(); toast(`Moved ${d.sessions.length} session${d.sessions.length===1?'':'s'} into the encrypted vault`); } }catch(e){}
+  localStorage.removeItem(STORE_KEY);
+}
+function lock(){
+  if(!V) return;
+  closeSheet(); stopSync(); clearInterval(tick);
+  V = null; db = emptyDb(); lastV = 0; dirty = false; pendingBlob = null; view.innerHTML = '';
+  lockScreen();
+}
+
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,7);
+const grp = id => db.groups.find(g => g.id === id);
+const sessOf = gid => db.sessions.filter(s => s.g === gid);
+const nextColor = () => PALETTE[(db.groups.length + db.counters.length) % PALETTE.length];
+function sortSessions(){ db.sessions.sort((a,b) => b.t - a.t); }
+function addGroup(name, color){ const g = {id:uid(), name:name.trim(), color: color || PALETTE[db.groups.length % PALETTE.length], tags:[]}; db.groups.push(g); return g; }
+function ensureTag(g, tag){ if(tag && !g.tags.includes(tag)) g.tags.push(tag); }
+function ctrMatches(c, s){ return s.g === c.g && (!c.tag || s.tags.includes(c.tag)); }
+function tagCounts(gid){ const m = new Map(); db.sessions.forEach(s => { if(s.g === gid) s.tags.forEach(t => m.set(t, (m.get(t)||0)+1)); }); return m; }
+
+/* ───────── helpers ───────── */
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const pad = n => String(n).padStart(2,'0');
+const DOW = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const fmtDate = t => { const d = new Date(t); return `${DOW[d.getDay()]} ${pad(d.getDate())}/${pad(d.getMonth()+1)}/${String(d.getFullYear()).slice(2)}`; };
+const fmtTime = t => { const d = new Date(t); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+function sinceHTML(t){
+  let s = Math.max(0, Math.floor((Date.now() - t)/1000));
+  const d = Math.floor(s/86400); s -= d*86400;
+  const h = Math.floor(s/3600); s -= h*3600;
+  const m = Math.floor(s/60); s -= m*60;
+  return `${d}<span class="u">${d===1?'day':'days'}</span>${pad(h)}:${pad(m)}:${pad(s)}`;
+}
+function gapText(ms){ const d = ms/DAY; if(d < 1) return Math.round(ms/3600000) + ' h'; if(d < 60) return (d < 10 ? d.toFixed(1) : Math.round(d)) + ' d'; return (d/30.44).toFixed(1) + ' mo'; }
+const toLocalInput = t => { const d = new Date(t); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+const monthKey = t => { const d = new Date(t); return d.getFullYear()*12 + d.getMonth(); };
+const mkLabel = k => `${pad(k%12+1)}/${String(Math.floor(k/12)).slice(2)}`;
+const pct = (a,b) => b ? Math.round(a/b*100) + '%' : '–';
+function tagSections(tags){
+  // group tags by a short prefix like "B-" / "E-" / "M-"; everything else under "Other"
+  const by = new Map();
+  tags.forEach(t => { const m = t.match(/^([A-Za-z]{1,2})-/); const k = m ? m[1].toUpperCase() : ''; if(!by.has(k)) by.set(k, []); by.get(k).push(t); });
+  const out = []; let other = by.get('') || [];
+  by.forEach((v,k) => { if(!k) return; if(v.length < 2) other = other.concat(v); else out.push([k + '-', v]); });
+  out.sort((a,b) => a[0].localeCompare(b[0]));
+  if(other.length) out.push([out.length ? 'Other' : '', other]);
+  return out;
+}
+
+/* ───────── render ───────── */
+const view = document.getElementById('view');
+let tick = null;
+
+function render(){
+  if(!V) return;
+  document.querySelectorAll('.tab').forEach(b => b.classList.toggle('active', b.dataset.tab === ui.tab));
+  clearInterval(tick);
+  if(!db.groups.length) view.innerHTML = emptyState();
+  else if(ui.tab === 'now') renderNow();
+  else if(ui.tab === 'charts') renderCharts();
+  else renderLog();
+  saveUI();
+}
+function emptyState(){
+  return `<div class="card empty">
+    <div>Nothing here yet. Import your Track &amp; Graph CSV exports (you can pick several at once), or start fresh.</div>
+    <div class="btns" style="justify-content:center">
+      <button class="btn primary" data-act="import">Import CSV</button>
+      <button class="btn" data-act="newGroup">New group</button>
+    </div></div>`;
+}
+
+/* NOW */
+function renderNow(){
+  const now = new Date(), mk = monthKey(now), yr = now.getFullYear();
+  const ctrs = db.counters.length ? db.counters : db.groups.map(g => ({id:'g'+g.id, name:g.name, g:g.id, tag:null, color:g.color}));
+  view.innerHTML = ctrs.map(c => {
+    const g = grp(c.g); if(!g) return '';
+    const ss = db.sessions.filter(s => ctrMatches(c, s));
+    const last = ss[0];  // sessions are kept newest first
+    const m = ss.filter(s => monthKey(s.t) === mk).length, y = ss.filter(s => new Date(s.t).getFullYear() === yr).length;
+    return `<section class="card ctr" style="--c:${c.color}">
+      <div class="ctr-top">
+        <div class="ctr-name">${esc(c.name)}${c.tag || c.name !== g.name ? `<small>${esc(g.name)}</small>` : ''}</div>
+        <button class="plus" data-act="add" data-g="${c.g}" data-tag="${esc(c.tag||'')}" aria-label="Log ${esc(c.name)}">+</button>
+      </div>
+      <div class="since" ${last ? `data-since="${last.t}"` : ''}>${last ? sinceHTML(last.t) : '—'}</div>
+      <div class="last">${last ? `${fmtDate(last.t)} · ${fmtTime(last.t)}` : 'Nothing logged yet'}</div>
+      ${last && last.tags.length ? `<div class="mini-tags">${last.tags.map(t => `<span class="mt ${t===c.tag?'hl':''}">${esc(t)}</span>`).join('')}</div>` : ''}
+      <div class="meta"><span>this month <b>${m}</b></span><span>${yr} <b>${y}</b></span><span>all time <b>${ss.length}</b></span></div>
+    </section>`;
+  }).join('') + (db.counters.length ? '' : `<p class="help" style="text-align:center">Tip: add counters for single tags (like PIV or B-Orgasm) in Settings.</p>`);
+  tick = setInterval(() => view.querySelectorAll('[data-since]').forEach(el => el.innerHTML = sinceHTML(+el.dataset.since)), 1000);
+}
+
+/* CHARTS */
+function niceStep(max){ if(max <= 5) return 1; const raw = max/4, p = Math.pow(10, Math.floor(Math.log10(raw))), m = raw/p; return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 5 ? 5 : 10) * p; }
+function svgLine(keys, series, h=200){
+  const W = 340, H = h, L = 26, R = 6, T = 8, B = 22, n = keys.length; if(!n) return '';
+  const max = Math.max(1, ...series.flatMap(s => s.vals.filter(v => v != null)));
+  const step = niceStep(max), top = Math.ceil(max/step)*step;
+  const x = i => L + (n === 1 ? (W-L-R)/2 : i*(W-L-R)/(n-1)), y = v => T + (H-T-B)*(1 - v/top);
+  let g = '';
+  for(let v = 0; v <= top + 1e-9; v += step) g += `<line class="grid" x1="${L}" x2="${W-R}" y1="${y(v)}" y2="${y(v)}"/><text class="ax" x="${L-5}" y="${y(v)+3}" text-anchor="end">${v}</text>`;
+  const every = Math.max(1, Math.ceil(n/6));
+  keys.forEach((k,i) => { if((n-1-i) % every === 0) g += `<text class="ax" x="${x(i)}" y="${H-6}" text-anchor="middle">${mkLabel(k)}</text>`; });
+  g += `<line class="base" x1="${L}" x2="${W-R}" y1="${y(0)}" y2="${y(0)}"/>`;
+  series.forEach(s => {
+    let d = '', pen = false;
+    s.vals.forEach((v,i) => { if(v == null){ pen = false; return; } d += (pen ? 'L' : 'M') + x(i).toFixed(1) + ',' + y(v).toFixed(1); pen = true; });
+    g += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.w||1.8}" ${s.dash ? 'stroke-dasharray="4 3"' : ''} stroke-linejoin="round" stroke-linecap="round" opacity="${s.op||1}"/>`;
+    if(s.dots && n <= 40) s.vals.forEach((v,i) => { if(v != null) g += `<circle cx="${x(i)}" cy="${y(v)}" r="2.4" fill="${s.color}"/>`; });
+  });
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img">${g}</svg>`;
+}
+function svgBars(labels, vals, color, h=170, hi=-1){
+  const W = 340, H = h, L = 26, R = 4, T = 14, B = 22, n = labels.length, max = Math.max(1, ...vals);
+  const step = niceStep(max), top = Math.ceil(max/step)*step, bw = (W-L-R)/n, y = v => T + (H-T-B)*(1 - v/top);
+  let g = '';
+  for(let v = 0; v <= top + 1e-9; v += step) g += `<line class="grid" x1="${L}" x2="${W-R}" y1="${y(v)}" y2="${y(v)}"/><text class="ax" x="${L-5}" y="${y(v)+3}" text-anchor="end">${v}</text>`;
+  vals.forEach((v,i) => {
+    const x0 = L + i*bw + bw*0.14, w = bw*0.72;
+    if(v > 0) g += `<rect x="${x0}" y="${y(v)}" width="${w}" height="${y(0)-y(v)}" rx="3" fill="${color}" opacity="${hi>=0 && i!==hi ? .55 : 1}"/>`;
+    if(v > 0 && n <= 14) g += `<text class="ax" x="${x0+w/2}" y="${y(v)-3}" text-anchor="middle" style="fill:var(--paper)">${v}</text>`;
+    g += `<text class="ax" x="${x0+w/2}" y="${H-6}" text-anchor="middle">${esc(labels[i])}</text>`;
+  });
+  g += `<line class="base" x1="${L}" x2="${W-R}" y1="${y(0)}" y2="${y(0)}"/>`;
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img">${g}</svg>`;
+}
+function hbars(rows, color, total){
+  const max = Math.max(1, ...rows.map(r => r[1]));
+  return rows.map(([nm,v]) => `<div class="hbar" style="--c:${color}"><span class="nm">${nm}</span><span class="bar"><i style="width:${(v/max*100).toFixed(1)}%"></i></span><span class="n">${total ? pct(v,total) : v}</span></div>`).join('');
+}
+
+function renderCharts(){
+  if(!grp(ui.cg)) ui.cg = db.groups[0].id;
+  const g = grp(ui.cg);
+  if(ui.ctag && !g.tags.includes(ui.ctag)) ui.ctag = null;
+  const tc = tagCounts(g.id);
+  const tagList = g.tags.slice().sort((a,b) => (tc.get(b)||0) - (tc.get(a)||0));
+  const color = g.color;
+  let html = `<div class="chips">${db.groups.map(x => `<button class="chip ${x.id===g.id?'on':''}" style="--c:${x.color}" data-act="cg" data-g="${x.id}"><i></i>${esc(x.name)}</button>`).join('')}</div>
+    <div class="chips"><button class="chip tag ${!ui.ctag?'on':''}" style="--c:${color}" data-act="ctag" data-tag="">All sessions</button>${tagList.map(t => `<button class="chip tag ${ui.ctag===t?'on':''}" style="--c:${color}" data-act="ctag" data-tag="${esc(t)}">${esc(t)} <span class="n">${tc.get(t)||0}</span></button>`).join('')}</div>`;
+
+  const all = sessOf(g.id).sort((a,b) => a.t - b.t);
+  const ss = ui.ctag ? all.filter(s => s.tags.includes(ui.ctag)) : all;
+  const what = ui.ctag ? esc(ui.ctag) : esc(g.name);
+  if(!ss.length){ view.innerHTML = html + `<div class="card empty">Nothing logged for ${what} yet.</div>`; return; }
+
+  const now = Date.now(), nowK = monthKey(now), firstK = monthKey(ss[0].t);
+  const counts = new Map(); ss.forEach(s => { const k = monthKey(s.t); counts.set(k, (counts.get(k)||0) + 1); });
+  const keys = []; for(let k = (ui.crange === '2y' ? Math.max(firstK, nowK-23) : firstK); k <= nowK; k++) keys.push(k);
+  const perMonth = keys.map(k => counts.get(k) || 0);
+  const avg3 = perMonth.map((_,i) => i < 2 ? null : +((perMonth[i]+perMonth[i-1]+perMonth[i-2])/3).toFixed(2));
+
+  const d = new Date(), yr = d.getFullYear(), ytdM = d.getMonth() + 1;
+  const thisYr = ss.filter(s => new Date(s.t).getFullYear() === yr).length;
+  const lastYrSame = ss.filter(s => { const x = new Date(s.t); return x.getFullYear() === yr-1 && x.getMonth() < ytdM && (x.getMonth() < ytdM-1 || x.getDate() <= d.getDate()); }).length;
+  const gaps = []; for(let i = 1; i < ss.length; i++) gaps.push(ss[i].t - ss[i-1].t);
+  const cur = now - ss[ss.length-1].t;
+  const longest = Math.max(cur, ...gaps, 0);
+  const sorted = gaps.slice().sort((a,b) => a-b), med = sorted.length ? sorted[Math.floor(sorted.length/2)] : 0;
+  const last12k = []; for(let k = nowK-11; k <= nowK; k++) last12k.push(k);
+  const last12 = last12k.map(k => counts.get(k) || 0), sum12 = last12.reduce((a,b) => a+b, 0);
+  const curRank = gaps.filter(x => x > cur).length;
+
+  const dow = [0,0,0,0,0,0,0]; ss.forEach(s => dow[(new Date(s.t).getDay()+6)%7]++);
+  const topDow = dow.indexOf(Math.max(...dow));
+  const bands = [['Night','0–5'],['Morning','6–11'],['Afternoon','12–17'],['Evening','18–23']];
+  const hrs = [0,0,0,0]; ss.forEach(s => hrs[Math.floor(new Date(s.t).getHours()/6)]++);
+
+  // tag mix: share of these sessions carrying each tag (other than the filter tag)
+  const mixFrom = ui.mixRange === '12m' ? ss.filter(s => s.t >= now - 365*DAY) : ss;
+  const mix = new Map(); mixFrom.forEach(s => s.tags.forEach(t => { if(t !== ui.ctag) mix.set(t, (mix.get(t)||0)+1); }));
+  const mixRows = [...mix.entries()].sort((a,b) => b[1]-a[1]).map(([t,v]) => [esc(t), v]);
+
+  html += `
+  <div class="stats">
+    <div class="stat"><span class="k">${yr} so far</span><span class="v">${thisYr}</span><span class="s">${(thisYr/ytdM).toFixed(1)}/month · same point ${yr-1}: ${lastYrSame}</span></div>
+    <div class="stat"><span class="k">Last 12 months</span><span class="v">${sum12}</span><span class="s">${(sum12/12).toFixed(1)}/month</span></div>
+    <div class="stat"><span class="k">Typical gap</span><span class="v">${gapText(med)}</span><span class="s">median between sessions</span></div>
+    <div class="stat"><span class="k">Current gap</span><span class="v">${gapText(cur)}</span><span class="s">${cur >= longest ? 'longest ever' : `longer than ${pct(gaps.length - curRank, gaps.length)} of gaps`} · record ${gapText(longest)}</span></div>
+  </div>
+  <section class="card">
+    <div class="card-h"><h2>Per month</h2><span class="seg"><button class="${ui.crange==='2y'?'on':''}" data-act="crange" data-v="2y">2Y</button><button class="${ui.crange==='all'?'on':''}" data-act="crange" data-v="all">All</button></span></div>
+    ${svgLine(keys, [{vals:perMonth, color, dots:true, op:.85}, {vals:avg3, color:'var(--paper)', dash:true, w:1.4, op:.7}])}
+    <div class="legend"><span><i style="--c:${color}"></i>${what}</span><span><i class="dash" style="--c:var(--paper)"></i>3-month average</span></div>
+  </section>
+  <section class="card">
+    <div class="card-h"><h2>Last 12 months</h2><span class="sub">${(sum12/12).toFixed(1)} a month</span></div>
+    ${svgBars(last12k.map(k => MON[k%12][0]), last12, color, 170, 11)}
+  </section>
+  ${yearCard(ss, color)}
+  <section class="card">
+    <div class="card-h"><h2>Day of week</h2><span class="sub">most often ${['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][topDow]}</span></div>
+    ${svgBars(['M','T','W','T','F','S','S'], dow, color, 160, topDow)}
+  </section>
+  <section class="card">
+    <div class="card-h"><h2>Time of day</h2></div>
+    ${hbars(hrs.map((v,i) => [`${bands[i][0]} <span style="color:var(--muted);font-size:11px">${bands[i][1]}</span>`, v]), color)}
+  </section>
+  ${mixRows.length ? `<section class="card">
+    <div class="card-h"><h2>${ui.ctag ? 'Often with' : 'Tag mix'}</h2><span class="seg"><button class="${ui.mixRange==='12m'?'on':''}" data-act="mix" data-v="12m">12M</button><button class="${ui.mixRange==='all'?'on':''}" data-act="mix" data-v="all">All</button></span></div>
+    <p class="help" style="margin:-4px 0 6px">Share of ${mixFrom.length} ${ui.ctag ? esc(ui.ctag) + ' ' : ''}sessions that included each tag.</p>
+    ${hbars(mixRows, color, mixFrom.length)}
+  </section>` : ''}`;
+  view.innerHTML = html;
+}
+function yearCard(ss, color){
+  const by = new Map(); ss.forEach(s => { const y = new Date(s.t).getFullYear(); by.set(y, (by.get(y)||0)+1); });
+  const ys = [...by.keys()].sort(); if(ys.length < 2) return '';
+  const cy = new Date().getFullYear(), frac = (Date.now() - new Date(cy,0,1)) / (new Date(cy+1,0,1) - new Date(cy,0,1));
+  return `<section class="card">
+    <div class="card-h"><h2>By year</h2><span class="sub">${cy} on pace for ≈${Math.round((by.get(cy)||0)/frac)}</span></div>
+    ${svgBars(ys.map(y => "'" + String(y).slice(2)), ys.map(y => by.get(y)), color, 150, ys.indexOf(cy))}
+  </section>`;
+}
+
+/* LOG */
+function renderLog(){
+  if(ui.lg !== 'all' && !grp(ui.lg)) ui.lg = 'all';
+  const q = ui.q.trim().toLowerCase();
+  let list = db.sessions.filter(s => (ui.lg === 'all' || s.g === ui.lg) && grp(s.g));
+  if(q) list = list.filter(s => s.tags.some(t => t.toLowerCase().includes(q)) || (s.note||'').toLowerCase().includes(q));
+  const total = list.length; const shown = list.slice(0, ui.limit);
+  let html = `<div class="chips"><button class="chip ${ui.lg==='all'?'on':''}" data-act="lg" data-g="all">All</button>${db.groups.map(g => `<button class="chip ${ui.lg===g.id?'on':''}" style="--c:${g.color}" data-act="lg" data-g="${g.id}"><i></i>${esc(g.name)}</button>`).join('')}</div>
+    <input class="search" id="q" type="search" placeholder="Search tags and notes" value="${esc(ui.q)}">`;
+  if(!shown.length) html += `<div class="card empty">No sessions${q ? ' match that search' : ''}.</div>`;
+  const monthN = new Map(); list.forEach(s => { const k = monthKey(s.t); monthN.set(k, (monthN.get(k)||0)+1); });
+  let curK = null, buf = '';
+  const flush = () => { if(buf) html += `<div class="rows">${buf}</div>`; buf = ''; };
+  shown.forEach(s => {
+    const k = monthKey(s.t), g = grp(s.g);
+    if(k !== curK){ flush(); curK = k; html += `<div class="month-h"><span>${MON[k%12]} ${Math.floor(k/12)}</span><span>${monthN.get(k)}</span></div>`; }
+    buf += `<button class="row" style="--c:${g.color}" data-act="edit" data-id="${s.id}"><i></i>
+      <span style="min-width:0"><div class="nm">${esc(g.name)}</div>
+        ${s.tags.length ? `<div class="mini-tags">${s.tags.map(t => `<span class="mt">${esc(t)}</span>`).join('')}</div>` : ''}
+        ${s.note ? `<div class="nt">${esc(s.note)}</div>` : ''}</span>
+      <span class="dt">${fmtDate(s.t)}<br>${fmtTime(s.t)}</span></button>`;
+  });
+  flush();
+  if(total > shown.length) html += `<button class="btn more" data-act="more">Show more (${total - shown.length} older)</button>`;
+  view.innerHTML = html;
+  const qi = document.getElementById('q');
+  qi.addEventListener('input', () => { ui.q = qi.value; ui.limit = 120; const pos = qi.selectionStart; renderLog(); const n = document.getElementById('q'); n.focus(); n.setSelectionRange(pos,pos); });
+}
+
+/* ───────── sheets ───────── */
+let sheetEl = null;
+function openSheet(html, onMount){
+  closeSheet();
+  const scrim = document.createElement('div'); scrim.className = 'scrim';
+  const sh = document.createElement('div'); sh.className = 'sheet'; sh.setAttribute('role','dialog'); sh.innerHTML = html;
+  scrim.addEventListener('click', closeSheet);
+  document.body.append(scrim, sh); sheetEl = {scrim, sh};
+  sh.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', closeSheet));
+  onMount && onMount(sh);
+}
+function closeSheet(){ if(sheetEl){ sheetEl.scrim.remove(); sheetEl.sh.remove(); sheetEl = null; } if(pendingRender && V){ pendingRender = false; render(); } }
+
+function sessionSheet(opts){
+  if(!db.groups.length){ newGroupPrompt(); return; }
+  const s = opts.id ? db.sessions.find(x => x.id === opts.id) : null;
+  let gid = s ? s.g : (grp(opts.g) ? opts.g : db.groups[0].id);
+  let tags = new Set(s ? s.tags : (opts.tag ? [opts.tag] : []));
+  openSheet(`
+    <div class="sheet-head"><h3>${s ? 'Edit session' : 'Log session'}</h3><button class="x" data-close aria-label="Close">✕</button></div>
+    <div class="chips" id="gPick"></div>
+    <div id="tagPick" style="display:grid;gap:10px"></div>
+    <label class="field"><span>When</span><input type="datetime-local" id="fT" value="${toLocalInput(s ? s.t : Date.now())}"></label>
+    <label class="field"><span>Note</span><textarea id="fN" placeholder="optional">${esc(s ? s.note : '')}</textarea></label>
+    <button class="btn primary block" id="fSave">${s ? 'Save changes' : 'Log it'}</button>
+    ${s ? `<button class="btn danger block" id="fDel">Delete session</button>` : ''}
+  `, sh => {
+    const draw = () => {
+      const g = grp(gid), tc = tagCounts(gid);
+      sh.querySelector('#gPick').innerHTML = db.groups.map(x => `<button class="chip ${x.id===gid?'on':''}" style="--c:${x.color}" data-pg="${x.id}"><i></i>${esc(x.name)}</button>`).join('');
+      const ordered = g.tags.slice().sort((a,b) => (tc.get(b)||0) - (tc.get(a)||0));
+      sh.querySelector('#tagPick').innerHTML = tagSections(ordered).map(([h, ts]) => `<div class="tagsec">${h ? `<span class="lbl">${esc(h)}</span>` : ''}<div class="chips wrap">${ts.map(t => `<button class="chip tag ${tags.has(t)?'on':''}" style="--c:${g.color}" data-t="${esc(t)}">${esc(t)}</button>`).join('')}</div></div>`).join('')
+        + `<div class="chips wrap"><button class="chip add" data-newtag>+ new tag</button></div>`;
+    };
+    draw();
+    sh.querySelector('#gPick').addEventListener('click', ev => { const b = ev.target.closest('[data-pg]'); if(b && b.dataset.pg !== gid){ gid = b.dataset.pg; tags = new Set(); draw(); } });
+    sh.querySelector('#tagPick').addEventListener('click', ev => {
+      const b = ev.target.closest('[data-t]');
+      if(b){ const t = b.dataset.t; tags.has(t) ? tags.delete(t) : tags.add(t); b.classList.toggle('on', tags.has(t)); return; }
+      if(ev.target.closest('[data-newtag]')){ const n = (prompt('New tag for ' + grp(gid).name) || '').trim(); if(n){ ensureTag(grp(gid), n); tags.add(n); save(); draw(); } }
+    });
+    sh.querySelector('#fSave').addEventListener('click', () => {
+      const t = new Date(sh.querySelector('#fT').value).getTime();
+      if(!isFinite(t)){ toast('Check the date and time'); return; }
+      const order = grp(gid).tags;
+      const rec = {g:gid, t, tags:[...tags].sort((a,b) => order.indexOf(a) - order.indexOf(b)), note: sh.querySelector('#fN').value.trim()};
+      let added = null;
+      if(s) Object.assign(s, rec); else { added = Object.assign({id:uid()}, rec); db.sessions.push(added); }
+      sortSessions(); save(); closeSheet(); render();
+      if(added) toast(`${grp(gid).name} logged`, 'Undo', () => { db.sessions = db.sessions.filter(x => x !== added); save(); render(); });
+    });
+    if(s) sh.querySelector('#fDel').addEventListener('click', () => {
+      db.sessions = db.sessions.filter(x => x !== s); save(); closeSheet(); render();
+      toast('Session deleted', 'Undo', () => { db.sessions.push(s); sortSessions(); save(); render(); });
+    });
+  });
+}
+
+function newGroupPrompt(){ const n = (prompt('Group name (e.g. Sex, Solo)') || '').trim(); if(n){ addGroup(n); save(); render(); } }
+
+function settingsSheet(){
+  const reopen = () => setTimeout(settingsSheet, 0);
+  openSheet(`
+    <div class="sheet-head"><h3>Settings</h3><button class="x" data-close aria-label="Close">✕</button></div>
+
+    <p class="sec">Counters on the Now tab</p>
+    <p class="help">Each counter shows time since the last session in a group — or the last one with a particular tag.${db.counters.length ? '' : ' With none set, you get one per group.'}</p>
+    <div id="ctrList" style="display:grid;gap:8px">
+      ${db.counters.map((c,i) => `<div class="srow" data-id="${c.id}">
+        <input type="color" value="${c.color}" aria-label="Colour">
+        <div style="display:grid;gap:6px;min-width:0">
+          <input type="text" value="${esc(c.name)}" data-f="name" aria-label="Name">
+          <div class="pair">
+            <select data-f="g" aria-label="Group">${db.groups.map(g => `<option value="${g.id}" ${g.id===c.g?'selected':''}>${esc(g.name)}</option>`).join('')}</select>
+            <select data-f="tag" aria-label="Tag"><option value="">Any session</option>${(grp(c.g)?.tags||[]).map(t => `<option ${t===c.tag?'selected':''}>${esc(t)}</option>`).join('')}</select>
+          </div>
+        </div>
+        <span style="display:grid;gap:4px"><button class="x" data-mv aria-label="Move up" ${i===0?'disabled':''}>↑</button><button class="x" data-del aria-label="Remove">✕</button></span>
+      </div>`).join('')}
+    </div>
+    <button class="btn" id="cAdd">+ Add counter</button>
+
+    <p class="sec">Groups &amp; tags</p>
+    <div id="grpList" style="display:grid;gap:12px">
+      ${db.groups.map(g => { const tc = tagCounts(g.id); return `<div data-gid="${g.id}" style="display:grid;gap:8px">
+        <div class="srow"><input type="color" value="${g.color}" aria-label="Colour"><input type="text" value="${esc(g.name)}" aria-label="Group name"><button class="x" data-gdel aria-label="Delete group">🗑</button></div>
+        <div class="chips wrap">${g.tags.map(t => `<button class="chip" data-tag="${esc(t)}">${esc(t)} <span class="n">${tc.get(t)||0}</span></button>`).join('')}<button class="chip add" data-tadd>+ tag</button></div>
+      </div>`; }).join('')}
+    </div>
+    <p class="help">Tap a tag to rename or remove it.</p>
+    <button class="btn" id="gAdd">+ New group</button>
+
+    <p class="sec">Security &amp; sync</p>
+    <p class="help">${esc(document.getElementById('syncLine').textContent)}. Locks itself after a minute in the background.</p>
+    <div class="btns"><button class="btn" id="kLock">Lock now</button><button class="btn" id="kPin">Change PIN</button><button class="btn" id="kCode">Show recovery code</button></div>
+    <button class="btn danger" id="kRemove">Remove from this device</button>
+
+    <p class="sec">Import</p>
+    <p class="help">Track &amp; Graph: export each group to CSV and import them here — you can pick several files at once. The group comes from the filename. Trackers stamped together are joined into one session, and "Trial" is skipped as Tally works gaps out itself. Re-importing skips what's already here.</p>
+    <button class="btn primary" id="sImp">Import CSV or backup</button>
+
+    <p class="sec">Back up</p>
+    <p class="help">A JSON backup is <b>not encrypted</b> — keep it somewhere private. ${FIREBASE_CONFIG ? 'Your synced copy is already a backup as long as you keep the recovery code.' : 'Until sync is set up, this phone holds the only copy.'}</p>
+    <div class="btns"><button class="btn" id="sJson">Export backup (JSON)</button><button class="btn" id="sCsv">Export CSV</button></div>
+
+    <p class="sec">Danger</p>
+    <button class="btn danger" id="sWipe">Delete all data</button>
+    <p class="help" style="text-align:center">${db.sessions.length} sessions · Tally v${VERSION}</p>
+  `, sh => {
+    // counters
+    const cl = sh.querySelector('#ctrList');
+    cl.addEventListener('change', ev => {
+      const row = ev.target.closest('.srow'); const c = db.counters.find(x => x.id === row.dataset.id); if(!c) return;
+      if(ev.target.type === 'color') c.color = ev.target.value;
+      const f = ev.target.dataset.f;
+      if(f === 'name' && ev.target.value.trim()) c.name = ev.target.value.trim();
+      if(f === 'g'){ c.g = ev.target.value; c.tag = null; save(); render(); reopen(); return; }
+      if(f === 'tag') c.tag = ev.target.value || null;
+      save(); render();
+    });
+    cl.addEventListener('click', ev => {
+      const row = ev.target.closest('.srow'); if(!row) return; const i = db.counters.findIndex(x => x.id === row.dataset.id);
+      if(ev.target.closest('[data-mv]') && i > 0){ [db.counters[i-1], db.counters[i]] = [db.counters[i], db.counters[i-1]]; save(); render(); reopen(); }
+      if(ev.target.closest('[data-del]')){ db.counters.splice(i,1); save(); render(); reopen(); }
+    });
+    sh.querySelector('#cAdd').addEventListener('click', () => {
+      if(!db.groups.length) return;
+      if(!db.counters.length) db.groups.forEach(g => db.counters.push({id:uid(), name:g.name, g:g.id, tag:null, color:g.color}));
+      const g = db.groups[0]; db.counters.push({id:uid(), name:'New counter', g:g.id, tag:null, color:nextColor()});
+      save(); render(); reopen();
+    });
+    // groups & tags
+    const gl = sh.querySelector('#grpList');
+    gl.addEventListener('change', ev => {
+      const box = ev.target.closest('[data-gid]'); const g = grp(box.dataset.gid);
+      if(ev.target.type === 'color') g.color = ev.target.value;
+      if(ev.target.type === 'text' && ev.target.value.trim()) g.name = ev.target.value.trim();
+      save(); render();
+    });
+    gl.addEventListener('click', ev => {
+      const box = ev.target.closest('[data-gid]'); if(!box) return; const g = grp(box.dataset.gid);
+      if(ev.target.closest('[data-gdel]')){
+        const n = sessOf(g.id).length;
+        if(!confirm(`Delete group "${g.name}"${n ? ` and its ${n} sessions` : ''}?`)) return;
+        db.groups = db.groups.filter(x => x !== g); db.sessions = db.sessions.filter(s => s.g !== g.id); db.counters = db.counters.filter(c => c.g !== g.id);
+        save(); render(); reopen(); return;
+      }
+      if(ev.target.closest('[data-tadd]')){ const n = (prompt('New tag for ' + g.name) || '').trim(); if(n){ ensureTag(g, n); save(); reopen(); } return; }
+      const tb = ev.target.closest('[data-tag]'); if(!tb) return;
+      const old = tb.dataset.tag, n = tagCounts(g.id).get(old) || 0;
+      const nu = prompt(`Rename "${old}" (used in ${n} sessions).\nLeave empty to remove the tag from all of them.`, old);
+      if(nu === null) return;
+      const name = nu.trim();
+      if(!name){
+        if(!confirm(`Remove "${old}" from ${n} sessions?`)) return;
+        g.tags = g.tags.filter(t => t !== old);
+        db.sessions.forEach(s => { if(s.g === g.id) s.tags = s.tags.filter(t => t !== old); });
+        db.counters.forEach(c => { if(c.g === g.id && c.tag === old) c.tag = null; });
+      } else if(name !== old){
+        const merge = g.tags.includes(name);
+        g.tags = merge ? g.tags.filter(t => t !== old) : g.tags.map(t => t === old ? name : t);
+        db.sessions.forEach(s => { if(s.g === g.id && s.tags.includes(old)){ s.tags = s.tags.filter(t => t !== old); if(!s.tags.includes(name)) s.tags.push(name); } });
+        db.counters.forEach(c => { if(c.g === g.id && c.tag === old) c.tag = name; });
+      }
+      save(); render(); reopen();
+    });
+    sh.querySelector('#gAdd').addEventListener('click', () => { const n = (prompt('Group name') || '').trim(); if(n){ addGroup(n); save(); render(); reopen(); } });
+    // import / export
+    sh.querySelector('#kLock').addEventListener('click', lock);
+    sh.querySelector('#kPin').addEventListener('click', () => { closeSheet(); verifyPin('Current PIN', () => choosePin('New PIN', '', async pin => { await wrapVault(V.raw, pin); hideLock(); render(); toast('PIN changed'); }), () => { hideLock(); render(); }); });
+    sh.querySelector('#kCode').addEventListener('click', () => { closeSheet(); verifyPin('Enter PIN to show code', () => showRecovery(false), () => { hideLock(); render(); }); });
+    sh.querySelector('#kRemove').addEventListener('click', () => {
+      if(!confirm(`Remove Tally from this phone? ${FIREBASE_CONFIG ? 'The synced copy stays in Firebase; you\'ll need the recovery code to add it back.' : 'Sync isn\'t set up, so this deletes the only copy.'}`)) return;
+      if(prompt('Type REMOVE to confirm') !== 'REMOVE') return;
+      stopSync(); [VAULT_KEY, BLOB_KEY, FAIL_KEY, STORE_KEY, UI_KEY].forEach(k => localStorage.removeItem(k));
+      V = null; db = emptyDb(); lastV = 0; closeSheet(); welcomeScreen();
+    });
+    sh.querySelector('#sImp').addEventListener('click', () => document.getElementById('fileIn').click());
+    sh.querySelector('#sJson').addEventListener('click', () => download(`tally-backup-${stamp()}.json`, JSON.stringify({app:'tally', version:VERSION, ...db}), 'application/json'));
+    sh.querySelector('#sCsv').addEventListener('click', () => db.groups.forEach((g,i) => setTimeout(() => download(`TrackAndGraph-${g.name.replace(/[^\w-]+/g,'_')}-${stamp()}.csv`, toCSV(g.id), 'text/csv'), i*400)));
+    sh.querySelector('#sWipe').addEventListener('click', () => {
+      if(!confirm(`Delete every group, session and counter${FIREBASE_CONFIG ? ' — here and in the synced copy' : ''}? Export a backup first if you might want it.`)) return;
+      if(prompt('Type DELETE to confirm') !== 'DELETE') return;
+      db = {groups:[], sessions:[], counters:[]}; save(); closeSheet(); render(); toast('All data deleted');
+    });
+  });
+}
+
+/* ───────── import / export ───────── */
+const stamp = () => { const d = new Date(); return `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}`; };
+function download(name, text, type){
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], {type})); a.download = name;
+  document.body.append(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
+const csvCell = s => { s = String(s ?? ''); return /[",\n\r]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s; };
+function isoLocal(t){
+  const d = new Date(t), off = -d.getTimezoneOffset(), sg = off >= 0 ? '+' : '-', a = Math.abs(off);
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${String(d.getMilliseconds()).padStart(3,'0')}${sg}${pad(Math.floor(a/60))}:${pad(a%60)}`;
+}
+function toCSV(gid){
+  const rows = ['FeatureName,Timestamp,Value,Label,Note'];
+  sessOf(gid).forEach(s => (s.tags.length ? s.tags : ['(session)']).forEach((t,i) => rows.push([t, isoLocal(s.t), '1.0', '', i === 0 ? s.note : ''].map(csvCell).join(','))));
+  return rows.join('\n');
+}
+function parseCSV(text){
+  const rows = []; let row = [], cell = '', q = false;
+  text = text.replace(/^﻿/, '');
+  for(let i = 0; i < text.length; i++){
+    const c = text[i];
+    if(q){ if(c === '"'){ if(text[i+1] === '"'){ cell += '"'; i++; } else q = false; } else cell += c; }
+    else if(c === '"') q = true;
+    else if(c === ','){ row.push(cell); cell = ''; }
+    else if(c === '\n' || c === '\r'){ if(c === '\r' && text[i+1] === '\n') i++; row.push(cell); rows.push(row); row = []; cell = ''; }
+    else cell += c;
+  }
+  if(cell !== '' || row.length){ row.push(cell); rows.push(row); }
+  return rows.filter(r => r.some(x => x.trim() !== ''));
+}
+function groupFromFilename(fname){
+  const m = fname.match(/TrackAndGraph-(.+?)-\d{8}-\d{6}/i);
+  return m ? m[1].replace(/_+$/,'').replace(/_/g,' ').trim() : '';
+}
+function addSessionsDeduped(gid, list){
+  const key = s => Math.floor(s.t/60000) + '|' + s.tags.slice().sort().join(',');
+  const seen = new Set(db.sessions.filter(s => s.g === gid).map(key));
+  let added = 0;
+  list.forEach(s => { const k = key(s); if(seen.has(k)) return; seen.add(k); db.sessions.push(Object.assign({id:uid(), g:gid, note:''}, s)); added++; });
+  return added;
+}
+function importCSV(text, fname){
+  if(!text.trim()) throw new Error(`${fname} is empty`);
+  const rows = parseCSV(text);
+  const h = rows[0].map(x => x.trim().toLowerCase());
+  const iF = h.indexOf('featurename'), iT = h.indexOf('timestamp'), iV = h.indexOf('value'), iL = h.indexOf('label'), iN = h.indexOf('note');
+  if(iF < 0 || iT < 0 || iV < 0) throw new Error(`${fname}: expected FeatureName, Timestamp, Value columns`);
+  const recs = [], nonUnit = new Map();
+  rows.slice(1).forEach(r => {
+    const name = (r[iF]||'').trim(), t = Date.parse((r[iT]||'').trim());
+    if(!name || !isFinite(t)) return;
+    let raw = (r[iV]||'').trim(), label = iL >= 0 ? (r[iL]||'').trim() : '';
+    if(iL < 0){ const m = raw.match(/^(-?[\d.]+):(.*)$/); if(m && isNaN(+m[2].split(':')[0])){ raw = m[1]; label = m[2]; } }
+    const v = parseFloat(raw);
+    if(isFinite(v) && v !== 1) nonUnit.set(name, (nonUnit.get(name)||0) + 1);
+    recs.push({name, t, label, note: iN >= 0 ? (r[iN]||'').trim() : ''});
+  });
+  const skipped = [...nonUnit.keys()];
+  const keep = recs.filter(r => !nonUnit.has(r.name)).sort((a,b) => a.t - b.t);
+  if(!keep.length) throw new Error(`${fname}: no rows to import`);
+
+  // which group?
+  const names = new Set(keep.map(r => r.name));
+  let g = null, best = 0;
+  db.groups.forEach(x => { const hit = [...names].filter(n => x.tags.includes(n)).length; if(hit > best){ best = hit; g = x; } });
+  if(!g || best < names.size/2){
+    let gname = groupFromFilename(fname);
+    const existing = gname && db.groups.find(x => x.name.toLowerCase() === gname.toLowerCase());
+    if(existing) g = existing;
+    else { if(!gname) gname = (prompt(`Which group is ${fname}? (e.g. Sex, Solo)`) || '').trim(); if(!gname) throw new Error('Import cancelled'); g = addGroup(gname); }
+  }
+  // cluster into sessions
+  const sessions = [];
+  keep.forEach(r => {
+    const tagsHere = [r.name].concat(r.label ? [r.label] : []);
+    const cur = sessions[sessions.length-1];
+    if(cur && r.t - cur.t < SESSION_WINDOW && !cur.tags.includes(r.name)){
+      tagsHere.forEach(t => { if(!cur.tags.includes(t)) cur.tags.push(t); });
+      if(r.note) cur.note = cur.note ? cur.note + ' · ' + r.note : r.note;
+    } else sessions.push({t:r.t, tags:tagsHere, note:r.note});
+  });
+  // tag order: by frequency
+  const freq = new Map(); sessions.forEach(s => s.tags.forEach(t => freq.set(t, (freq.get(t)||0)+1)));
+  [...freq.keys()].sort((a,b) => freq.get(b) - freq.get(a)).forEach(t => ensureTag(g, t));
+  sessions.forEach(s => s.tags.sort((a,b) => g.tags.indexOf(a) - g.tags.indexOf(b)));
+  const added = addSessionsDeduped(g.id, sessions);
+  return `${g.name}: ${added} session${added===1?'':'s'}${added < sessions.length ? ` (${sessions.length-added} already here)` : ''}${skipped.length ? ` · skipped ${skipped.join(', ')}` : ''}`;
+}
+function importJSON(text){
+  const j = JSON.parse(text);
+  if(!Array.isArray(j.groups) || !Array.isArray(j.sessions)) throw new Error('Not a Tally backup');
+  const map = {}; const msgs = [];
+  j.groups.forEach(x => {
+    let g = db.groups.find(y => y.name.toLowerCase() === x.name.toLowerCase());
+    if(!g) g = addGroup(x.name, x.color);
+    (x.tags||[]).forEach(t => ensureTag(g, t)); map[x.id] = g.id;
+  });
+  j.groups.forEach(x => { const list = j.sessions.filter(s => s.g === x.id).map(s => ({t:+s.t, tags:(s.tags||[]).slice(), note:s.note||''})); msgs.push(`${x.name}: ${addSessionsDeduped(map[x.id], list)} sessions`); });
+  if(!db.counters.length && Array.isArray(j.counters)) j.counters.forEach(c => { if(map[c.g]) db.counters.push({id:uid(), name:c.name, g:map[c.g], tag:c.tag||null, color:c.color}); });
+  return msgs.join(' · ');
+}
+document.getElementById('fileIn').addEventListener('change', async ev => {
+  const files = [...ev.target.files]; ev.target.value = ''; if(!files.length) return;
+  const msgs = [];
+  for(const f of files){
+    try{ const txt = await f.text(); msgs.push(txt.trim().startsWith('{') ? importJSON(txt) : importCSV(txt, f.name)); }
+    catch(err){ msgs.push('⚠ ' + err.message); }
+  }
+  sortSessions(); save();
+  if(!db.counters.length) seedCounters();
+  save(); closeSheet(); render();
+  openSheet(`<div class="sheet-head"><h3>Import</h3><button class="x" data-close aria-label="Close">✕</button></div>
+    ${msgs.map(m => `<p class="help" style="font-size:14px;color:var(--paper)">${esc(m)}</p>`).join('')}
+    <button class="btn primary block" data-close>Done</button>`);
+});
+function seedCounters(){
+  // one "any session" counter per group, plus the most-used tags that look like the old trackers
+  db.groups.forEach(g => {
+    db.counters.push({id:uid(), name:g.name, g:g.id, tag:null, color:g.color});
+    const tc = tagCounts(g.id);
+    ['PIV','B-Orgasm','E-Orgasm','M-Orgasm'].filter(t => tc.get(t)).forEach(t => db.counters.push({id:uid(), name:t, g:g.id, tag:t, color:nextColor()}));
+  });
+}
+
+function verifyPin(title, ok, cancel){
+  const rec = vaultRec();
+  const box = pinScreen({title, len: rec.n, extra:'<button class="linkbtn" data-cancel>Cancel</button>', onPin: async pin => {
+    try{ await aesDec(await pinKey(pin, unb64(rec.salt)), rec); ok(); return null; }catch(e){ return 'Wrong PIN'; }
+  }});
+  box.querySelector('[data-cancel]').onclick = cancel;
+}
+
+/* ───────── toast ───────── */
+let toastT = null;
+function toast(msg, action, fn){
+  document.querySelectorAll('.toast').forEach(t => t.remove()); clearTimeout(toastT);
+  const t = document.createElement('div'); t.className = 'toast'; t.setAttribute('role','status');
+  t.innerHTML = `<span>${esc(msg)}</span>`;
+  if(action){ const b = document.createElement('button'); b.textContent = action; b.onclick = () => { t.remove(); fn(); }; t.append(b); }
+  document.body.append(t); toastT = setTimeout(() => t.remove(), action ? 5000 : 3200);
+}
+
+/* ───────── events ───────── */
+document.querySelector('.tabs').addEventListener('click', ev => { const b = ev.target.closest('.tab'); if(b){ ui.tab = b.dataset.tab; render(); window.scrollTo(0,0); } });
+document.getElementById('fab').addEventListener('click', () => sessionSheet({g: ui.tab==='charts' ? ui.cg : (ui.lg!=='all' ? ui.lg : null)}));
+document.getElementById('openSettings').addEventListener('click', settingsSheet);
+view.addEventListener('click', ev => {
+  const b = ev.target.closest('[data-act]'); if(!b) return;
+  const a = b.dataset.act, later = () => setTimeout(render, 0);
+  if(a === 'add') sessionSheet({g:b.dataset.g, tag:b.dataset.tag || null});
+  else if(a === 'edit') sessionSheet({id:b.dataset.id});
+  else if(a === 'cg'){ ui.cg = b.dataset.g; ui.ctag = null; later(); }
+  else if(a === 'ctag'){ ui.ctag = b.dataset.tag || null; later(); }
+  else if(a === 'crange'){ ui.crange = b.dataset.v; later(); }
+  else if(a === 'mix'){ ui.mixRange = b.dataset.v; later(); }
+  else if(a === 'lg'){ ui.lg = b.dataset.g; ui.limit = 120; later(); }
+  else if(a === 'more'){ ui.limit += 300; later(); }
+  else if(a === 'import') document.getElementById('fileIn').click();
+  else if(a === 'newGroup') newGroupPrompt();
+});
+document.addEventListener('keydown', ev => { if(ev.key === 'Escape') closeSheet(); });
+let hiddenAt = 0;
+document.addEventListener('visibilitychange', () => {
+  if(document.hidden){ hiddenAt = Date.now(); return; }
+  if(V && hiddenAt && Date.now() - hiddenAt > LOCK_AFTER) return lock();
+  if(V && ui.tab === 'now' && !sheetEl) render();
+});
+
+/* PWA: inline manifest + service worker */
+(function(){
+  const icon = 'data:image/svg+xml,' + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="112" fill="#2F6FE4"/><g stroke="#fff" stroke-width="34" stroke-linecap="round"><line x1="150" y1="150" x2="150" y2="362"/><line x1="222" y1="150" x2="222" y2="362"/><line x1="294" y1="150" x2="294" y2="362"/><line x1="366" y1="150" x2="366" y2="362"/><line x1="110" y1="330" x2="404" y2="190"/></g></svg>`);
+  const man = {name:'Tally', short_name:'Tally', start_url:location.href.split('#')[0], display:'standalone', background_color:'#F7F8FA', theme_color:'#F7F8FA', icons:[{src:icon, sizes:'512x512', type:'image/svg+xml', purpose:'any'}]};
+  const l = document.createElement('link'); l.rel = 'manifest'; l.href = URL.createObjectURL(new Blob([JSON.stringify(man)], {type:'application/manifest+json'})); document.head.append(l);
+  const ic = document.createElement('link'); ic.rel = 'icon'; ic.href = icon; document.head.append(ic);
+  if('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+})();
+
+document.body.append(lockEl);
+if(!window.crypto || !crypto.subtle) showLock(`${LOGO}<h2>Can't open securely</h2><p>This browser can't do the encryption Tally needs. Open it from the https:// address.</p>`);
+else if(vaultRec()) lockScreen(); else welcomeScreen();
+</script>
+</body>
+</html>
