@@ -59,6 +59,9 @@
   Hand, #F7F8FA ground, white cards, #2F6FE4 accent).
 
   CHANGELOG
+  v1.4.0 — Long-press (0.4 s) then drag to reorder chart cards (order kept per
+           device in ui.chartOrder, "reset order" link) and Now counters
+           (order saved to db, so it syncs). makeSortable() does both.
   v1.3.0 — Log/edit sheet: month calendar (Mon-first, future days off, dots
            on days that already have a session in the chosen group) plus a
            time box and "Now" button, replacing the datetime scroller.
@@ -82,7 +85,7 @@
 <meta name="theme-color" content="#F7F8FA">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Tally">
-<title>Tally v1.3.0</title>
+<title>Tally v1.4.0</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Patrick+Hand&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -205,6 +208,10 @@
   .field input, .field select, .field textarea{font:inherit; font-size:15px; padding:9px 11px; border-radius:10px; border:1px solid var(--line); background:var(--surface); color:var(--paper); width:100%; min-width:0;}
   .field textarea{min-height:56px; resize:vertical;}
   .tagsec{display:grid; gap:6px;}
+  html.no-anchor, html.no-anchor body{overflow-anchor:none;}
+  .dz{-webkit-user-select:none; user-select:none; -webkit-touch-callout:none; position:relative;}
+  .dz.lifted{z-index:30; filter:drop-shadow(0 10px 22px rgba(38,49,63,.25)); opacity:.97;}
+  .dz.lifted.card, .dz.lifted > .card, .dz.lifted > .stats{outline:2px solid var(--mustard); outline-offset:-1px; border-radius:var(--radius);}
   .cal{border:1px solid var(--line); border-radius:12px; padding:8px 8px 6px;}
   .cal-h{display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;}
   .cal-h span{font-weight:600; font-size:14.5px;}
@@ -259,7 +266,7 @@
   <div class="title-row">
     <h1 class="title">Tally</h1>
     <div class="title-right">
-      <span class="version-badge">v1.3.0</span>
+      <span class="version-badge">v1.4.0</span>
       <button class="icon-btn" id="openSettings" aria-label="Settings">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       </button>
@@ -278,7 +285,7 @@
 
 <script>
 'use strict';
-const VERSION = '1.3.0';
+const VERSION = '1.4.0';
 const STORE_KEY = 'tally.v1';
 const UI_KEY = 'tally.ui';
 const SESSION_WINDOW = 15 * 60000;
@@ -311,7 +318,7 @@ function normalize(d){
 }
 function loadUI(){ try{ return JSON.parse(localStorage.getItem(UI_KEY)) || {}; }catch(e){ return {}; } }
 // UI state is not encrypted, so it never stores tag names
-function saveUI(){ try{ localStorage.setItem(UI_KEY, JSON.stringify({tab:ui.tab, cg:ui.cg, crange:ui.crange, mixRange:ui.mixRange, lg:ui.lg})); }catch(e){} }
+function saveUI(){ try{ localStorage.setItem(UI_KEY, JSON.stringify({tab:ui.tab, cg:ui.cg, crange:ui.crange, mixRange:ui.mixRange, lg:ui.lg, chartOrder:ui.chartOrder||null})); }catch(e){} }
 
 /* ───────── crypto ───────── */
 const te = new TextEncoder(), td = new TextDecoder();
@@ -391,7 +398,7 @@ async function onRemote(snap){
     refresh(); setSync();
   }catch(e){ setSync('synced data could not be decrypted'); }
 }
-function refresh(){ if(sheetEl) pendingRender = true; else render(); }
+function refresh(){ if(sheetEl || dragging) pendingRender = true; else render(); }
 function loadScript(src){ return new Promise((res, rej) => { if(document.querySelector(`script[src="${src}"]`)) return res(); const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = () => rej(new Error('could not load Firebase')); document.head.append(s); }); }
 async function startSync(){
   setSync();
@@ -608,12 +615,12 @@ function emptyState(){
 function renderNow(){
   const now = new Date(), mk = monthKey(now), yr = now.getFullYear();
   const ctrs = db.counters.length ? db.counters : db.groups.map(g => ({id:'g'+g.id, name:g.name, g:g.id, tag:null, color:g.color}));
-  view.innerHTML = ctrs.map(c => {
+  view.innerHTML = '<div id="sortNow" style="display:grid;gap:14px">' + ctrs.map(c => {
     const g = grp(c.g); if(!g) return '';
     const ss = db.sessions.filter(s => ctrMatches(c, s));
     const last = ss[0];  // sessions are kept newest first
     const m = ss.filter(s => monthKey(s.t) === mk).length, y = ss.filter(s => new Date(s.t).getFullYear() === yr).length;
-    return `<section class="card ctr" style="--c:${c.color}">
+    return `<section class="card ctr dz" data-k="${c.id}" style="--c:${c.color}">
       <div class="ctr-top">
         <div class="ctr-name">${esc(c.name)}${c.tag || c.name !== g.name ? `<small>${esc(g.name)}</small>` : ''}</div>
         <button class="plus" data-act="add" data-g="${c.g}" data-tag="${esc(c.tag||'')}" aria-label="Log ${esc(c.name)}">+</button>
@@ -623,9 +630,83 @@ function renderNow(){
       ${last && last.tags.length ? `<div class="mini-tags">${last.tags.map(t => `<span class="mt ${t===c.tag?'hl':''}">${esc(t)}</span>`).join('')}</div>` : ''}
       <div class="meta"><span>this month <b>${m}</b></span><span>${yr} <b>${y}</b></span><span>all time <b>${ss.length}</b></span></div>
     </section>`;
-  }).join('') + (db.counters.length ? '' : `<p class="help" style="text-align:center">Tip: add counters for single tags (like PIV or B-Orgasm) in Settings.</p>`);
+  }).join('') + '</div>' + `<p class="help" style="text-align:center">${db.counters.length ? 'Hold a card to move it.' : 'Tip: add counters for single tags (like PIV or B-Orgasm) in Settings.'}</p>`;
+  makeSortable(document.getElementById('sortNow'), keys => {
+    if(db.counters.length) db.counters.sort((a,b) => keys.indexOf(a.id) - keys.indexOf(b.id));
+    else db.groups.sort((a,b) => keys.indexOf('g'+a.id) - keys.indexOf('g'+b.id));
+    save();
+  });
   tick = setInterval(() => view.querySelectorAll('[data-since]').forEach(el => el.innerHTML = sinceHTML(+el.dataset.since)), 1000);
 }
+
+/* LONG-PRESS DRAG TO REORDER
+   Hold ~0.4 s on a .dz child, then drag. Moving before the hold fires = normal scroll. */
+let dragging = null, suppressClick = false, mouseHooked = false;
+const sortBoxes = new Set();
+function makeSortable(box, onDrop){
+  if(!box) return;
+  const HOLD = 400, SLOP = 8;
+  let timer = null, sx = 0, sy = 0, cand = null;
+  const kids = () => [...box.children].filter(x => x.classList.contains('dz'));
+  const place = () => {
+    const d = dragging; if(!d) return;
+    const el = d.el; el.style.transform = '';
+    const want = d.y - d.grab, h = el.offsetHeight;
+    for(let guard = 0; guard < 20; guard++){
+      const prev = el.previousElementSibling, next = el.nextElementSibling;
+      if(prev && prev.classList.contains('dz')){ const r = prev.getBoundingClientRect(); if(want < r.top + r.height/2){ box.insertBefore(el, prev); continue; } }
+      if(next && next.classList.contains('dz')){ const r = next.getBoundingClientRect(); if(want + h > r.top + r.height/2){ box.insertBefore(next, el); continue; } }
+      break;
+    }
+    el.style.transform = `translateY(${want - el.getBoundingClientRect().top}px)`;
+  };
+  const begin = (el, y) => {
+    cand = null; const r = el.getBoundingClientRect();
+    dragging = {el, box, grab: y - r.top, y, raf: 0, place, finish};
+    el.classList.add('lifted'); box.classList.add('sorting'); document.documentElement.classList.add('no-anchor');
+    if(navigator.vibrate) try{ navigator.vibrate(15); }catch(e){}
+    const loop = () => {
+      if(!dragging || dragging.el !== el) return;
+      const edge = 70, vh = innerHeight, yy = dragging.y;
+      const v = yy < edge ? -Math.ceil((edge-yy)/6) : yy > vh-edge ? Math.ceil((yy-(vh-edge))/6) : 0;
+      if(v){ scrollBy(0, v); place(); }
+      dragging.raf = requestAnimationFrame(loop);
+    };
+    dragging.raf = requestAnimationFrame(loop);
+    place();
+  };
+  function finish(){
+    clearTimeout(timer); cand = null;
+    const d = dragging; if(!d || d.box !== box) return;
+    cancelAnimationFrame(d.raf); dragging = null;
+    d.el.classList.remove('lifted'); d.el.style.transform = ''; box.classList.remove('sorting'); document.documentElement.classList.remove('no-anchor');
+    suppressClick = true; setTimeout(() => suppressClick = false, 350);
+    onDrop(kids().map(x => x.dataset.k));
+    if(pendingRender && !sheetEl){ pendingRender = false; setTimeout(render, 0); }
+  }
+  const down = (x, y, target) => {
+    const el = target.closest('.dz'); if(!el || el.parentElement !== box || dragging) return;
+    cand = el; sx = x; sy = y; clearTimeout(timer);
+    timer = setTimeout(() => { if(cand === el && el.isConnected) begin(el, y); }, HOLD);
+  };
+  const move = (x, y) => {
+    if(dragging && dragging.box === box){ dragging.y = y; place(); return true; }
+    if(cand && (Math.abs(x-sx) > SLOP || Math.abs(y-sy) > SLOP)){ clearTimeout(timer); cand = null; }
+    return false;
+  };
+  box.addEventListener('touchstart', e => { if(e.touches.length === 1) down(e.touches[0].clientX, e.touches[0].clientY, e.target); else { clearTimeout(timer); cand = null; } }, {passive:true});
+  box.addEventListener('touchmove', e => { if(move(e.touches[0].clientX, e.touches[0].clientY)) e.preventDefault(); }, {passive:false});
+  box.addEventListener('touchend', finish); box.addEventListener('touchcancel', finish);
+  box.addEventListener('mousedown', e => { if(e.button === 0) down(e.clientX, e.clientY, e.target); });
+  box._move = move; box._finish = finish;
+  box.addEventListener('contextmenu', e => { if(cand || dragging) e.preventDefault(); });
+  if(!mouseHooked){
+    mouseHooked = true;
+    addEventListener('mousemove', e => { const b = dragging ? dragging.box : null; document.querySelectorAll('#sortNow,#sortCharts').forEach(x => x._move && (b ? x === b : true) && x._move(e.clientX, e.clientY)); });
+    addEventListener('mouseup', () => document.querySelectorAll('#sortNow,#sortCharts').forEach(x => x._finish && x._finish()));
+  }
+}
+document.addEventListener('click', e => { if(suppressClick){ e.stopPropagation(); e.preventDefault(); suppressClick = false; } }, true);
 
 /* CHARTS */
 function niceStep(max){ if(max <= 5) return 1; const raw = max/4, p = Math.pow(10, Math.floor(Math.log10(raw))), m = raw/p; return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 5 ? 5 : 10) * p; }
@@ -708,37 +789,47 @@ function renderCharts(){
   const mix = new Map(); mixFrom.forEach(s => s.tags.forEach(t => { if(t !== ui.ctag) mix.set(t, (mix.get(t)||0)+1); }));
   const mixRows = [...mix.entries()].sort((a,b) => b[1]-a[1]).map(([t,v]) => [esc(t), v]);
 
-  html += `
+  const blocks = {};
+  blocks.stats = `
   <div class="stats">
     <div class="stat"><span class="k">${yr} so far</span><span class="v">${thisYr}</span><span class="s">${(thisYr/ytdM).toFixed(1)}/month · same point ${yr-1}: ${lastYrSame}</span></div>
     <div class="stat"><span class="k">Last 12 months</span><span class="v">${sum12}</span><span class="s">${(sum12/12).toFixed(1)}/month</span></div>
     <div class="stat"><span class="k">Typical gap</span><span class="v">${gapText(med)}</span><span class="s">median between sessions</span></div>
     <div class="stat"><span class="k">Current gap</span><span class="v">${gapText(cur)}</span><span class="s">${cur >= longest ? 'longest ever' : `longer than ${pct(gaps.length - curRank, gaps.length)} of gaps`} · record ${gapText(longest)}</span></div>
-  </div>
-  <section class="card">
+  </div>`;
+  blocks.month = `<section class="card">
     <div class="card-h"><h2>Per month</h2><span class="seg"><button class="${ui.crange==='2y'?'on':''}" data-act="crange" data-v="2y">2Y</button><button class="${ui.crange==='all'?'on':''}" data-act="crange" data-v="all">All</button></span></div>
     ${svgLine(keys, [{vals:perMonth, color, dots:true, op:.85}, {vals:avg3, color:'var(--paper)', dash:true, w:1.4, op:.7}])}
     <div class="legend"><span><i style="--c:${color}"></i>${what}</span><span><i class="dash" style="--c:var(--paper)"></i>3-month average</span></div>
-  </section>
-  <section class="card">
+  </section>`;
+  blocks.last12 = `<section class="card">
     <div class="card-h"><h2>Last 12 months</h2><span class="sub">${(sum12/12).toFixed(1)} a month</span></div>
     ${svgBars(last12k.map(k => MON[k%12][0]), last12, color, 170, 11)}
-  </section>
-  ${yearCard(ss, color)}
-  <section class="card">
+  </section>`;
+  blocks.year = yearCard(ss, color);
+  blocks.dow = `<section class="card">
     <div class="card-h"><h2>Day of week</h2><span class="sub">most often ${['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][topDow]}</span></div>
     ${svgBars(['M','T','W','T','F','S','S'], dow, color, 160, topDow)}
-  </section>
-  <section class="card">
+  </section>`;
+  blocks.tod = `<section class="card">
     <div class="card-h"><h2>Time of day</h2></div>
     ${hbars(hrs.map((v,i) => [`${bands[i][0]} <span style="color:var(--muted);font-size:11px">${bands[i][1]}</span>`, v]), color)}
-  </section>
-  ${mixRows.length ? `<section class="card">
+  </section>`;
+  blocks.mix = mixRows.length ? `<section class="card">
     <div class="card-h"><h2>${ui.ctag ? 'Often with' : 'Tag mix'}</h2><span class="seg"><button class="${ui.mixRange==='12m'?'on':''}" data-act="mix" data-v="12m">12M</button><button class="${ui.mixRange==='all'?'on':''}" data-act="mix" data-v="all">All</button></span></div>
     <p class="help" style="margin:-4px 0 6px">Share of ${mixFrom.length} ${ui.ctag ? esc(ui.ctag) + ' ' : ''}sessions that included each tag.</p>
     ${hbars(mixRows, color, mixFrom.length)}
-  </section>` : ''}`;
+  </section>` : '';
+  const order = chartOrder();
+  html += `<div id="sortCharts" style="display:grid;gap:14px">${order.filter(k => blocks[k]).map(k => `<div class="dz" data-k="${k}">${blocks[k]}</div>`).join('')}</div>
+    <p class="help" style="text-align:center">Hold a chart to move it${ui.chartOrder ? ' · <button class="linkbtn" data-act="resetOrder" style="padding:0;font-size:12.5px">reset order</button>' : ''}</p>`;
   view.innerHTML = html;
+  makeSortable(document.getElementById('sortCharts'), keys => { ui.chartOrder = keys; saveUI(); setTimeout(render, 0); });
+}
+const CHART_KEYS = ['stats','month','last12','year','dow','tod','mix'];
+function chartOrder(){
+  const o = Array.isArray(ui.chartOrder) ? ui.chartOrder.filter(k => CHART_KEYS.includes(k)) : [];
+  return o.concat(CHART_KEYS.filter(k => !o.includes(k)));
 }
 function yearCard(ss, color){
   const by = new Map(); ss.forEach(s => { const y = new Date(s.t).getFullYear(); by.set(y, (by.get(y)||0)+1); });
@@ -1161,6 +1252,7 @@ view.addEventListener('click', ev => {
   else if(a === 'mix'){ ui.mixRange = b.dataset.v; later(); }
   else if(a === 'lg'){ ui.lg = b.dataset.g; ui.limit = 120; later(); }
   else if(a === 'more'){ ui.limit += 300; later(); }
+  else if(a === 'resetOrder'){ ui.chartOrder = null; saveUI(); later(); }
   else if(a === 'import') document.getElementById('fileIn').click();
   else if(a === 'newGroup') newGroupPrompt();
 });
