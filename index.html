@@ -60,6 +60,10 @@
   Hand, #F7F8FA ground, white cards, #2F6FE4 accent).
 
   CHANGELOG
+  v1.6.1 — Current gap is compared with the AVERAGE (mean) gap for the chosen
+           period: "Under your average · about N days to go" / "N days past
+           your average". Bar marker line = average. Stat tiles show
+           Average gap (typical/median as secondary).
   v1.6.0 — Drill-down: tap any bar / point / row on Charts to open the
            sessions behind it (drillSheet). Year → by-month bars → month;
            back button walks the stack. Shows count, typical gap, tag mix
@@ -100,7 +104,7 @@
 <meta name="theme-color" content="#F7F8FA">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Tally">
-<title>Tally v1.6.0</title>
+<title>Tally v1.6.1</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Patrick+Hand&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -299,7 +303,7 @@
   <div class="title-row">
     <h1 class="title">Tally</h1>
     <div class="title-right">
-      <span class="version-badge">v1.6.0</span>
+      <span class="version-badge">v1.6.1</span>
       <button class="icon-btn" id="openSettings" aria-label="Settings">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       </button>
@@ -318,7 +322,7 @@
 
 <script>
 'use strict';
-const VERSION = '1.6.0';
+const VERSION = '1.6.1';
 const STORE_KEY = 'tally.v1';
 const UI_KEY = 'tally.ui';
 const SESSION_WINDOW = 15 * 60000;
@@ -682,23 +686,25 @@ function baseline(ssAsc, per){
   return {n:inP.length, gaps, sorted:g, med:quant(g,.5), p25:quant(g,.25), p75:quant(g,.75), p90:quant(g,.9), max:g[g.length-1]||0, mean:g.length ? g.reduce((a,b)=>a+b,0)/g.length : 0};
 }
 const dd = ms => { const d = ms/DAY; return d < 1 ? '<1' : d < 10 ? (Math.round(d*2)/2).toString().replace(/\.0$/,'') : String(Math.round(d)); };
+const daysTxt = ms => { const v = dd(ms); return v + (v === '1' || v === '<1' ? ' day' : ' days'); };
 function normBlock(ssAsc, color, cur){
   const per = curPeriod(), b = baseline(ssAsc, per);
   if(b.gaps.length < 4) return `<div class="norm"><div class="norm-line muted">Not enough sessions in ${esc(per.short)} to know what's normal — try a longer period.</div></div>`;
   const share = b.sorted.filter(x => x >= cur).length / b.sorted.length;
   const inTen = `${Math.max(1, Math.round(share*10))} in 10`;
+  const diff = Math.abs(b.mean - cur), avg = dd(b.mean);
   let head, sub;
-  if(cur < b.p25){ head = 'Early days'; sub = `the next one usually comes between day ${dd(b.p25)} and day ${dd(b.p75)}`; }
-  else if(cur <= b.p75){ head = 'Within your usual range'; sub = cur <= b.med ? `typical gap is ${dd(b.med)} days` : `past the typical ${dd(b.med)} days — ${inTen} gaps go this long`; }
-  else if(cur <= b.p90){ head = 'Longer than most, still common'; sub = `about ${inTen} gaps go this long`; }
-  else if(cur <= b.max){ head = 'A longer gap'; sub = `about ${inTen} gaps go this long · longest was ${dd(b.max)} days`; }
-  else { head = 'Longer than any gap in this period'; sub = `previous longest was ${dd(b.max)} days`; }
-  const scale = Math.max(b.p90 * 1.3, cur * 1.08, b.med * 2.2, 3*DAY);
+  // compared against the AVERAGE gap for the chosen period
+  if(diff < DAY/2){ head = 'Right on your average'; sub = `average gap is ${avg} days`; }
+  else if(cur < b.mean){ head = 'Under your average'; sub = `average gap is ${avg} days — about ${daysTxt(b.mean - cur)} to go`; }
+  else if(cur <= b.max){ head = `${daysTxt(diff)} past your average`; sub = `average is ${avg} days · ${inTen} gaps go this long`; }
+  else { head = `${daysTxt(diff)} past your average`; sub = `longer than any gap in this period (previous longest ${dd(b.max)} days)`; }
+  const scale = Math.max(b.p90 * 1.3, cur * 1.08, b.mean * 2.2, 3*DAY);
   const at = v => Math.min(100, v/scale*100).toFixed(1);
   return `<div class="norm" style="--c:${color}">
     <div class="norm-line"><b>${head}</b> · ${sub}</div>
-    <div class="nbar" aria-hidden="true"><span class="band" style="left:${at(b.p25)}%;width:${(at(b.p75)-at(b.p25)).toFixed(1)}%"></span><span class="med" style="left:${at(b.med)}%"></span><span class="cur" style="left:${at(cur)}%"></span></div>
-    <div class="norm-sub">Usual ${dd(b.p25)}–${dd(b.p75)} days · typical ${dd(b.med)} · average ${dd(b.mean)} <span class="muted">(${esc(per.short)})</span></div>
+    <div class="nbar" aria-hidden="true"><span class="band" style="left:${at(b.p25)}%;width:${(at(b.p75)-at(b.p25)).toFixed(1)}%"></span><span class="med" style="left:${at(b.mean)}%"></span><span class="cur" style="left:${at(cur)}%"></span></div>
+    <div class="norm-sub">Average ${avg} days · usual ${dd(b.p25)}–${dd(b.p75)} · typical ${dd(b.med)} <span class="muted">(${esc(per.short)})</span></div>
   </div>`;
 }
 function periodChips(){
@@ -887,7 +893,7 @@ function drillSheet(spec, stack){
     </div>
     <div class="stats">
       <div class="stat"><span class="k">Sessions</span><span class="v">${d.list.length}</span></div>
-      <div class="stat"><span class="k">Typical gap</span><span class="v">${sg.length >= 2 ? dd(quant(sg,.5)) + ' d' : '–'}</span><span class="s">${sg.length >= 4 ? `usual ${dd(quant(sg,.25))}–${dd(quant(sg,.75))} d` : 'between these'}</span></div>
+      <div class="stat"><span class="k">Average gap</span><span class="v">${sg.length >= 2 ? dd(sg.reduce((a,b)=>a+b,0)/sg.length) + ' d' : '–'}</span><span class="s">${sg.length >= 4 ? `typical ${dd(quant(sg,.5))} · usual ${dd(quant(sg,.25))}–${dd(quant(sg,.75))} d` : 'between these'}</span></div>
     </div>
     ${months}
     ${tagRows.length ? `<div><div class="lbl" style="margin-bottom:4px">Tags in these sessions</div>${hbars(tagRows.map(([t,v]) => [esc(t), v]), col, d.list.length)}</div>` : ''}
@@ -993,8 +999,8 @@ function renderCharts(){
   <div class="stats">
     <div class="stat"><span class="k">${yr} so far</span><span class="v">${thisYr}</span><span class="s">${(thisYr/ytdM).toFixed(1)}/month · same point ${yr-1}: ${lastYrSame}</span></div>
     <div class="stat"><span class="k">Last 12 months</span><span class="v">${sum12}</span><span class="s">${(sum12/12).toFixed(1)}/month</span></div>
-    <div class="stat"><span class="k">Typical gap</span><span class="v">${bl.gaps.length ? dd(bl.med) + ' d' : '–'}</span><span class="s">${bl.gaps.length ? `usual ${dd(bl.p25)}–${dd(bl.p75)} d` : 'not enough data'} · ${esc(per.short)}</span></div>
-    <div class="stat"><span class="k">Current gap</span><span class="v">${gapText(cur)}</span><span class="s">${bl.gaps.length ? `longer than ${pct(bl.sorted.filter(x => x < cur).length, bl.sorted.length)} of gaps (${esc(per.short)})` : ''} · record ${gapText(longest)}</span></div>
+    <div class="stat"><span class="k">Average gap</span><span class="v">${bl.gaps.length ? dd(bl.mean) + ' d' : '–'}</span><span class="s">${bl.gaps.length ? `typical ${dd(bl.med)} · usual ${dd(bl.p25)}–${dd(bl.p75)} d` : 'not enough data'} · ${esc(per.short)}</span></div>
+    <div class="stat"><span class="k">Current gap</span><span class="v">${gapText(cur)}</span><span class="s">${bl.gaps.length ? (Math.abs(cur - bl.mean) < DAY/2 ? 'right on average' : `${dd(Math.abs(cur - bl.mean))} d ${cur < bl.mean ? 'under' : 'over'} average`) + ` (${esc(per.short)})` : ''} · record ${gapText(longest)}</span></div>
   </div>`;
   blocks.month = `<section class="card">
     <div class="card-h"><h2>Per month</h2><span class="seg"><button class="${ui.crange==='2y'?'on':''}" data-act="crange" data-v="2y">2Y</button><button class="${ui.crange==='all'?'on':''}" data-act="crange" data-v="all">All</button></span></div>
@@ -1040,7 +1046,7 @@ function gapsCard(ss, bl, per, cur, color){
     <div class="card-h"><h2>What's normal</h2><span class="sub">gaps between sessions</span></div>
     ${periodChips()}
     ${bl.gaps.length >= 2 ? `
-      <p class="help" style="margin:8px 0 4px">In <b>${esc(per.name.toLowerCase().startsWith('last') ? 'the ' + per.name.toLowerCase() : per.name)}</b>: typical gap <b>${dd(bl.med)} days</b>, usual range <b>${dd(bl.p25)}–${dd(bl.p75)}</b>, average ${dd(bl.mean)}, longest ${dd(bl.max)}. ${bl.n} sessions.</p>
+      <p class="help" style="margin:8px 0 4px">In <b>${esc(per.name.toLowerCase().startsWith('last') ? 'the ' + per.name.toLowerCase() : per.name)}</b>: average gap <b>${dd(bl.mean)} days</b>, usual range <b>${dd(bl.p25)}–${dd(bl.p75)}</b>, typical ${dd(bl.med)}, longest ${dd(bl.max)}. ${bl.n} sessions.</p>
       ${svgBars(B.map(x => x[2]), counts, color, 160, curB, B.map((_,i) => 'gap:'+i))}
       <p class="help" style="margin:2px 0 0;text-align:center">How long gaps lasted · darker bar = where today's gap sits</p>` : `<p class="help" style="margin-top:8px">Not enough sessions in ${esc(per.short)}.</p>`}
     ${ys.length > 1 ? `<div class="card-h" style="margin:14px 0 4px"><h2 style="font-size:18px">Typical gap by year</h2><span class="sub">days</span></div>
