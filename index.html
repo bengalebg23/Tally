@@ -15,9 +15,10 @@
     db = {
       groups:   [{id, name, color, tags:[name…]}],     e.g. Sex, Masturbate
       sessions: [{id, g, t, tags:[name…], note}],      t = epoch ms
-      counters: [{id, name, g, tag|null, color}]       "time since" cards
+      counters: [{id, name, g, tags:[name…], color}]   "time since" cards
     }
-  A counter with tag=null counts every session in its group.
+  A counter matches sessions that carry ANY of its tags (never a whole group,
+  so e.g. an M-Porn-only session doesn't reset an M-Orgasm counter).
 
   SECURITY / STORAGE (v1.2.0)
   - The repo is public and has no sign-in, so the data is END-TO-END
@@ -59,6 +60,9 @@
   Hand, #F7F8FA ground, white cards, #2F6FE4 accent).
 
   CHANGELOG
+  v1.5.1 — Counters are tag-based only: {tags:[…]} matching any of them.
+           Old group-wide counters (tag null) are dropped on load; single
+           `tag` migrated to `tags`. Settings: tick tags per counter.
   v1.5.0 — "What's normal": each Now card shows where today's gap sits against
            a baseline (median, 25–75% usual band, average) with calm wording
            (normBlock). Baseline period picker: 3/6/12 months, each year, all
@@ -91,7 +95,7 @@
 <meta name="theme-color" content="#F7F8FA">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Tally">
-<title>Tally v1.5.0</title>
+<title>Tally v1.5.1</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Patrick+Hand&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -285,7 +289,7 @@
   <div class="title-row">
     <h1 class="title">Tally</h1>
     <div class="title-right">
-      <span class="version-badge">v1.5.0</span>
+      <span class="version-badge">v1.5.1</span>
       <button class="icon-btn" id="openSettings" aria-label="Settings">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       </button>
@@ -304,7 +308,7 @@
 
 <script>
 'use strict';
-const VERSION = '1.5.0';
+const VERSION = '1.5.1';
 const STORE_KEY = 'tally.v1';
 const UI_KEY = 'tally.ui';
 const SESSION_WINDOW = 15 * 60000;
@@ -333,8 +337,16 @@ function normalize(d){
   d = d && typeof d === 'object' ? d : {};
   return {groups: Array.isArray(d.groups) ? d.groups.map(g => Object.assign({tags:[]}, g)) : [],
           sessions: Array.isArray(d.sessions) ? d.sessions.map(s => Object.assign({tags:[], note:''}, s)).sort((a,b) => b.t - a.t) : [],
-          counters: Array.isArray(d.counters) ? d.counters : [],
+          counters: Array.isArray(d.counters) ? d.counters.map(fixCounter).filter(Boolean) : [],
           periods: Array.isArray(d.periods) ? d.periods : []};
+}
+// Counters watch one or more TAGS (never a whole group). Older counters had a single
+// `tag` (or null = any session in the group); null ones are dropped by design.
+function fixCounter(c){
+  if(!c || typeof c !== 'object') return null;
+  const tags = Array.isArray(c.tags) ? c.tags.filter(Boolean) : (c.tag ? [c.tag] : []);
+  if(!tags.length) return null;
+  const out = Object.assign({}, c, {tags}); delete out.tag; return out;
 }
 function loadUI(){ try{ return JSON.parse(localStorage.getItem(UI_KEY)) || {}; }catch(e){ return {}; } }
 // UI state is not encrypted, so it never stores tag names
@@ -575,7 +587,12 @@ const nextColor = () => PALETTE[(db.groups.length + db.counters.length) % PALETT
 function sortSessions(){ db.sessions.sort((a,b) => b.t - a.t); }
 function addGroup(name, color){ const g = {id:uid(), name:name.trim(), color: color || PALETTE[db.groups.length % PALETTE.length], tags:[]}; db.groups.push(g); return g; }
 function ensureTag(g, tag){ if(tag && !g.tags.includes(tag)) g.tags.push(tag); }
-function ctrMatches(c, s){ return s.g === c.g && (!c.tag || s.tags.includes(c.tag)); }
+function ctrMatches(c, s){ return s.g === c.g && c.tags.some(t => s.tags.includes(t)); }
+function defaultCounters(){
+  // no counters set → one per group, on that group's most-used tag
+  return db.groups.map(g => { const tc = tagCounts(g.id), t = [...tc.entries()].sort((a,b) => b[1]-a[1])[0]; return t ? {id:'g'+g.id, name:t[0], g:g.id, tags:[t[0]], color:g.color} : null; }).filter(Boolean);
+}
+const ctrLabel = c => c.tags.join(' or ');
 function tagCounts(gid){ const m = new Map(); db.sessions.forEach(s => { if(s.g === gid) s.tags.forEach(t => m.set(t, (m.get(t)||0)+1)); }); return m; }
 
 /* ───────── helpers ───────── */
@@ -705,7 +722,7 @@ function periodSheet(){
 /* NOW */
 function renderNow(){
   const now = new Date(), mk = monthKey(now), yr = now.getFullYear();
-  const ctrs = db.counters.length ? db.counters : db.groups.map(g => ({id:'g'+g.id, name:g.name, g:g.id, tag:null, color:g.color}));
+  const ctrs = db.counters.length ? db.counters : defaultCounters();
   view.innerHTML = `<div class="per-wrap"><span class="lbl">Normal based on</span>${periodChips()}</div>` + '<div id="sortNow" style="display:grid;gap:14px">' + ctrs.map(c => {
     const g = grp(c.g); if(!g) return '';
     const ss = db.sessions.filter(s => ctrMatches(c, s));
@@ -713,16 +730,16 @@ function renderNow(){
     const m = ss.filter(s => monthKey(s.t) === mk).length, y = ss.filter(s => new Date(s.t).getFullYear() === yr).length;
     return `<section class="card ctr dz" data-k="${c.id}" style="--c:${c.color}">
       <div class="ctr-top">
-        <div class="ctr-name">${esc(c.name)}${c.tag || c.name !== g.name ? `<small>${esc(g.name)}</small>` : ''}</div>
-        <button class="plus" data-act="add" data-g="${c.g}" data-tag="${esc(c.tag||'')}" aria-label="Log ${esc(c.name)}">+</button>
+        <div class="ctr-name">${esc(c.name)}<small>${esc(c.name === ctrLabel(c) ? g.name : ctrLabel(c))}</small></div>
+        <button class="plus" data-act="add" data-g="${c.g}" data-tag="${esc(c.tags.length === 1 ? c.tags[0] : '')}" aria-label="Log ${esc(c.name)}">+</button>
       </div>
       <div class="since" ${last ? `data-since="${last.t}"` : ''}>${last ? sinceHTML(last.t) : '—'}</div>
       <div class="last">${last ? `${fmtDate(last.t)} · ${fmtTime(last.t)}` : 'Nothing logged yet'}</div>
       ${last ? normBlock(ss.slice().reverse(), c.color, Date.now() - last.t) : ''}
-      ${last && last.tags.length ? `<div class="mini-tags">${last.tags.map(t => `<span class="mt ${t===c.tag?'hl':''}">${esc(t)}</span>`).join('')}</div>` : ''}
+      ${last && last.tags.length ? `<div class="mini-tags">${last.tags.map(t => `<span class="mt ${c.tags.includes(t)?'hl':''}">${esc(t)}</span>`).join('')}</div>` : ''}
       <div class="meta"><span>this month <b>${m}</b></span><span>${yr} <b>${y}</b></span><span>all time <b>${ss.length}</b></span></div>
     </section>`;
-  }).join('') + '</div>' + `<p class="help" style="text-align:center">${db.counters.length ? 'Hold a card to move it.' : 'Tip: add counters for single tags (like PIV or B-Orgasm) in Settings.'}</p>`;
+  }).join('') + '</div>' + `<p class="help" style="text-align:center">Each card counts sessions with its tag. Hold a card to move it; set them up in Settings.</p>`;
   makeSortable(document.getElementById('sortNow'), keys => {
     if(db.counters.length) db.counters.sort((a,b) => keys.indexOf(a.id) - keys.indexOf(b.id));
     else db.groups.sort((a,b) => keys.indexOf('g'+a.id) - keys.indexOf('g'+b.id));
@@ -1089,16 +1106,16 @@ function settingsSheet(){
     <div class="sheet-head"><h3>Settings</h3><button class="x" data-close aria-label="Close">✕</button></div>
 
     <p class="sec">Counters on the Now tab</p>
-    <p class="help">Each counter shows time since the last session in a group — or the last one with a particular tag.${db.counters.length ? '' : ' With none set, you get one per group.'}</p>
+    <p class="help">Each counter shows time since the last session that had its tag. Tick more than one tag to count any of them — logging something else (e.g. M-Porn on its own) won't reset it.</p>
     <div id="ctrList" style="display:grid;gap:8px">
       ${db.counters.map((c,i) => `<div class="srow" data-id="${c.id}">
         <input type="color" value="${c.color}" aria-label="Colour">
         <div style="display:grid;gap:6px;min-width:0">
           <input type="text" value="${esc(c.name)}" data-f="name" aria-label="Name">
-          <div class="pair">
+          <div class="pair" style="grid-template-columns:1fr">
             <select data-f="g" aria-label="Group">${db.groups.map(g => `<option value="${g.id}" ${g.id===c.g?'selected':''}>${esc(g.name)}</option>`).join('')}</select>
-            <select data-f="tag" aria-label="Tag"><option value="">Any session</option>${(grp(c.g)?.tags||[]).map(t => `<option ${t===c.tag?'selected':''}>${esc(t)}</option>`).join('')}</select>
           </div>
+          <div class="chips wrap">${(grp(c.g)?.tags||[]).map(t => `<button class="chip tag ${c.tags.includes(t)?'on':''}" style="--c:${c.color}" data-ct="${esc(t)}">${esc(t)}</button>`).join('')}</div>
         </div>
         <span style="display:grid;gap:4px"><button class="x" data-mv aria-label="Move up" ${i===0?'disabled':''}>↑</button><button class="x" data-del aria-label="Remove">✕</button></span>
       </div>`).join('')}
@@ -1139,19 +1156,24 @@ function settingsSheet(){
       if(ev.target.type === 'color') c.color = ev.target.value;
       const f = ev.target.dataset.f;
       if(f === 'name' && ev.target.value.trim()) c.name = ev.target.value.trim();
-      if(f === 'g'){ c.g = ev.target.value; c.tag = null; save(); render(); reopen(); return; }
-      if(f === 'tag') c.tag = ev.target.value || null;
+      if(f === 'g'){ const t = grp(ev.target.value).tags[0]; if(!t){ toast('That group has no tags yet'); reopen(); return; } c.g = ev.target.value; c.tags = [t]; save(); render(); reopen(); return; }
       save(); render();
     });
     cl.addEventListener('click', ev => {
       const row = ev.target.closest('.srow'); if(!row) return; const i = db.counters.findIndex(x => x.id === row.dataset.id);
+      const ct = ev.target.closest('[data-ct]');
+      if(ct){ const c = db.counters[i], t = ct.dataset.ct;
+        if(c.tags.includes(t)){ if(c.tags.length === 1){ toast('A counter needs at least one tag'); return; } c.tags = c.tags.filter(x => x !== t); }
+        else c.tags.push(t);
+        ct.classList.toggle('on', c.tags.includes(t)); save(); render(); return; }
       if(ev.target.closest('[data-mv]') && i > 0){ [db.counters[i-1], db.counters[i]] = [db.counters[i], db.counters[i-1]]; save(); render(); reopen(); }
       if(ev.target.closest('[data-del]')){ db.counters.splice(i,1); save(); render(); reopen(); }
     });
     sh.querySelector('#cAdd').addEventListener('click', () => {
       if(!db.groups.length) return;
-      if(!db.counters.length) db.groups.forEach(g => db.counters.push({id:uid(), name:g.name, g:g.id, tag:null, color:g.color}));
-      const g = db.groups[0]; db.counters.push({id:uid(), name:'New counter', g:g.id, tag:null, color:nextColor()});
+      if(!db.counters.length) defaultCounters().forEach(c => db.counters.push(Object.assign({}, c, {id:uid()})));
+      const g = db.groups.find(x => x.tags.length); if(!g){ toast('Add a tag first'); return; }
+      db.counters.push({id:uid(), name:g.tags[0], g:g.id, tags:[g.tags[0]], color:nextColor()});
       save(); render(); reopen();
     });
     // groups & tags
@@ -1180,12 +1202,13 @@ function settingsSheet(){
         if(!confirm(`Remove "${old}" from ${n} sessions?`)) return;
         g.tags = g.tags.filter(t => t !== old);
         db.sessions.forEach(s => { if(s.g === g.id) s.tags = s.tags.filter(t => t !== old); });
-        db.counters.forEach(c => { if(c.g === g.id && c.tag === old) c.tag = null; });
+        db.counters.forEach(c => { if(c.g === g.id) c.tags = c.tags.filter(t => t !== old); });
+        db.counters = db.counters.filter(c => c.tags.length);
       } else if(name !== old){
         const merge = g.tags.includes(name);
         g.tags = merge ? g.tags.filter(t => t !== old) : g.tags.map(t => t === old ? name : t);
         db.sessions.forEach(s => { if(s.g === g.id && s.tags.includes(old)){ s.tags = s.tags.filter(t => t !== old); if(!s.tags.includes(name)) s.tags.push(name); } });
-        db.counters.forEach(c => { if(c.g === g.id && c.tag === old) c.tag = name; });
+        db.counters.forEach(c => { if(c.g === g.id && c.tags.includes(old)){ c.tags = [...new Set(c.tags.map(t => t === old ? name : t))]; if(c.name === old) c.name = name; } });
       }
       save(); render(); reopen();
     });
@@ -1309,7 +1332,7 @@ function importJSON(text){
     (x.tags||[]).forEach(t => ensureTag(g, t)); map[x.id] = g.id;
   });
   j.groups.forEach(x => { const list = j.sessions.filter(s => s.g === x.id).map(s => ({t:+s.t, tags:(s.tags||[]).slice(), note:s.note||''})); msgs.push(`${x.name}: ${addSessionsDeduped(map[x.id], list)} sessions`); });
-  if(!db.counters.length && Array.isArray(j.counters)) j.counters.forEach(c => { if(map[c.g]) db.counters.push({id:uid(), name:c.name, g:map[c.g], tag:c.tag||null, color:c.color}); });
+  if(!db.counters.length && Array.isArray(j.counters)) j.counters.forEach(c => { const f = fixCounter(c); if(f && map[c.g]) db.counters.push(Object.assign(f, {id:uid(), g:map[c.g]})); });
   return msgs.join(' · ');
 }
 document.getElementById('fileIn').addEventListener('change', async ev => {
@@ -1327,12 +1350,12 @@ document.getElementById('fileIn').addEventListener('change', async ev => {
     <button class="btn primary block" data-close>Done</button>`);
 });
 function seedCounters(){
-  // one "any session" counter per group, plus the most-used tags that look like the old trackers
+  // tag counters that match the old Track & Graph trackers; fall back to each group's top tag
   db.groups.forEach(g => {
-    db.counters.push({id:uid(), name:g.name, g:g.id, tag:null, color:g.color});
     const tc = tagCounts(g.id);
-    ['PIV','B-Orgasm','E-Orgasm','M-Orgasm'].filter(t => tc.get(t)).forEach(t => db.counters.push({id:uid(), name:t, g:g.id, tag:t, color:nextColor()}));
+    ['PIV','B-Orgasm','E-Orgasm','M-Orgasm'].filter(t => tc.get(t)).forEach(t => db.counters.push({id:uid(), name:t, g:g.id, tags:[t], color:nextColor()}));
   });
+  if(!db.counters.length) defaultCounters().forEach(c => db.counters.push(Object.assign({}, c, {id:uid()})));
 }
 
 function verifyPin(title, ok, cancel){
