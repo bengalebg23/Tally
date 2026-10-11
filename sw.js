@@ -1,5 +1,5 @@
 // Tally service worker — network first, cache fallback so it opens offline.
-const CACHE = 'tally-v1.8.1';
+const CACHE = 'tally-v1.8.2';
 const CORE = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {
