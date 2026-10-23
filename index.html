@@ -60,6 +60,9 @@
   Hand, #F7F8FA ground, white cards, #2F6FE4 accent).
 
   CHANGELOG
+  v1.9.1 — Filters survive closing the app: Charts tag selection is kept
+           encrypted with the vault key (UIX_KEY, so no tag names in plain
+           storage); Avg/Raw overlay toggle saved with the rest of the UI state.
   v1.9.0 — Month-by-month bar chart gets its own period chips: 6 / 12 / 24
            months rolling or any calendar year (ui.mwin, monthWindow()).
            Works in single and overlay views; bars still drill into months.
@@ -136,7 +139,7 @@
 <link rel="manifest" href="manifest.webmanifest?v=3">
 <link rel="icon" type="image/png" href="icon-192.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
-<title>Tally v1.9.0</title>
+<title>Tally v1.9.1</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Patrick+Hand&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -361,7 +364,7 @@
   <div class="title-row">
     <h1 class="title">Tally</h1>
     <div class="title-right">
-      <span class="version-badge">v1.9.0</span>
+      <span class="version-badge">v1.9.1</span>
       <button class="icon-btn" id="themeBtn" aria-label="Switch light or dark theme"></button>
       <button class="icon-btn" id="openSettings" aria-label="Settings">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
@@ -381,9 +384,10 @@
 
 <script>
 'use strict';
-const VERSION = '1.9.0';
+const VERSION = '1.9.1';
 const STORE_KEY = 'tally.v1';
 const UI_KEY = 'tally.ui';
+const UIX_KEY = 'tally.uix';      // encrypted UI state that names tags {iv, ct}
 const SESSION_WINDOW = 15 * 60000;
 const PALETTE = ['#2F6FE4','#e34948','#1baf7a','#eda100','#e87ba4','#4a3aa7','#F0703C','#0f9bb5'];
 const DAY = 86400000;
@@ -422,8 +426,22 @@ function fixCounter(c){
   const out = Object.assign({}, c, {tags}); delete out.tag; return out;
 }
 function loadUI(){ try{ return JSON.parse(localStorage.getItem(UI_KEY)) || {}; }catch(e){ return {}; } }
-// UI state is not encrypted, so it never stores tag names
-function saveUI(){ try{ localStorage.setItem(UI_KEY, JSON.stringify({tab:ui.tab, cg:ui.cg, crange:ui.crange, mixRange:ui.mixRange, lg:ui.lg, chartOrder:ui.chartOrder||null, period:ui.period||null, mwin:ui.mwin||null})); }catch(e){} }
+// UI state is not encrypted, so it never stores tag names — those go in UIX_KEY, sealed with the vault key
+function saveUI(){ try{ localStorage.setItem(UI_KEY, JSON.stringify({tab:ui.tab, cg:ui.cg, crange:ui.crange, mixRange:ui.mixRange, lg:ui.lg, chartOrder:ui.chartOrder||null, period:ui.period||null, mwin:ui.mwin||null, ovSmooth:ui.ovSmooth === false ? false : null})); }catch(e){} saveSecretUI(); }
+let uixLast = null;
+function saveSecretUI(){
+  if(!V) return;
+  const j = JSON.stringify({ctags: Array.isArray(ui.ctags) ? ui.ctags : []});
+  if(j === uixLast) return; uixLast = j;
+  aesEnc(V.key, te.encode(j)).then(o => { try{ localStorage.setItem(UIX_KEY, JSON.stringify(o)); }catch(e){} }).catch(() => {});
+}
+async function loadSecretUI(){
+  try{
+    const o = JSON.parse(localStorage.getItem(UIX_KEY)); if(!o || !o.ct) return;
+    const x = JSON.parse(td.decode(await aesDec(V.key, o)));
+    if(Array.isArray(x.ctags)){ ui.ctags = x.ctags.slice(0, 4); ui.ctag = ui.ctags.length === 1 ? ui.ctags[0] : null; uixLast = JSON.stringify({ctags: ui.ctags}); }
+  }catch(e){ try{ localStorage.removeItem(UIX_KEY); }catch(_){} }
+}
 
 /* ───────── crypto ───────── */
 const te = new TextEncoder(), td = new TextDecoder();
@@ -638,6 +656,7 @@ async function afterUnlock(){
     try{ const o = JSON.parse(localStorage.getItem(BLOB_KEY)); if(o && o.ct){ db = normalize(JSON.parse(td.decode(await aesDec(V.key, o)))); lastV = o.v || 1; } }
     catch(e){ toast('Local copy could not be read — will use synced data'); }
   }
+  await loadSecretUI();
   hideLock(); render(); startSync();
 }
 function migratePlain(){
@@ -1534,7 +1553,7 @@ function settingsSheet(){
     sh.querySelector('#kRemove').addEventListener('click', () => {
       if(!confirm(`Remove Tally from this phone? ${FIREBASE_CONFIG ? 'The synced copy stays in Firebase; you\'ll need the recovery code to add it back.' : 'Sync isn\'t set up, so this deletes the only copy.'}`)) return;
       if(prompt('Type REMOVE to confirm') !== 'REMOVE') return;
-      stopSync(); [VAULT_KEY, BLOB_KEY, FAIL_KEY, STORE_KEY, UI_KEY].forEach(k => localStorage.removeItem(k));
+      stopSync(); [VAULT_KEY, BLOB_KEY, FAIL_KEY, STORE_KEY, UI_KEY, UIX_KEY].forEach(k => localStorage.removeItem(k));
       V = null; db = emptyDb(); lastV = 0; closeSheet(); welcomeScreen();
     });
     sh.querySelector('#sImp').addEventListener('click', () => document.getElementById('fileIn').click());
