@@ -60,6 +60,8 @@
   Hand, #F7F8FA ground, white cards, #2F6FE4 accent).
 
   CHANGELOG
+  v1.10.1 — + sheet gets a pink "Period" chip next to the groups (cycleQuick):
+           opens the ongoing period to end it, or a new one starting today.
   v1.10.0 — Her period: db.cycles [{id, from, to|null}] ('YYYY-MM-DD', to null =
            still going, counted for at most CYC_OPEN_MAX days) and db.cycle
            {g, exclude}. Applies to one group only (Settings → Period; default
@@ -150,7 +152,7 @@
 <link rel="manifest" href="manifest.webmanifest?v=3">
 <link rel="icon" type="image/png" href="icon-192.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
-<title>Tally v1.10.0</title>
+<title>Tally v1.10.1</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Patrick+Hand&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -388,7 +390,7 @@
   <div class="title-row">
     <h1 class="title">Tally</h1>
     <div class="title-right">
-      <span class="version-badge">v1.10.0</span>
+      <span class="version-badge">v1.10.1</span>
       <button class="icon-btn" id="themeBtn" aria-label="Switch light or dark theme"></button>
       <button class="icon-btn" id="openSettings" aria-label="Settings">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
@@ -408,7 +410,7 @@
 
 <script>
 'use strict';
-const VERSION = '1.10.0';
+const VERSION = '1.10.1';
 const STORE_KEY = 'tally.v1';
 const UI_KEY = 'tally.ui';
 const UIX_KEY = 'tally.uix';      // encrypted UI state that names tags {iv, ct}
@@ -1514,7 +1516,8 @@ function sessionSheet(opts){
   `, sh => {
     const draw = () => {
       const g = grp(gid), tc = tagCounts(gid);
-      sh.querySelector('#gPick').innerHTML = db.groups.map(x => `<button class="chip ${x.id===gid?'on':''}" style="--c:${x.color}" data-pg="${x.id}"><i></i>${esc(x.name)}</button>`).join('');
+      sh.querySelector('#gPick').innerHTML = db.groups.map(x => `<button class="chip ${x.id===gid?'on':''}" style="--c:${x.color}" data-pg="${x.id}"><i></i>${esc(x.name)}</button>`).join('')
+        + (!s && cycG() ? `<button class="chip" style="--c:var(--cyc)" data-cycp><i></i>Period</button>` : '');
       const ordered = g.tags.slice().sort((a,b) => (tc.get(b)||0) - (tc.get(a)||0));
       sh.querySelector('#tagPick').innerHTML = tagSections(ordered).map(([h, ts]) => `<div class="tagsec">${h ? `<span class="lbl">${esc(h)}</span>` : ''}<div class="chips wrap">${ts.map(t => `<button class="chip tag ${tags.has(t)?'on':''}" style="--c:${g.color}" data-t="${esc(t)}">${esc(t)}</button>`).join('')}</div></div>`).join('')
         + `<div class="chips wrap"><button class="chip add" data-newtag>+ new tag</button></div>`;
@@ -1552,7 +1555,7 @@ function sessionSheet(opts){
     });
     sh.querySelector('[data-now]').addEventListener('click', () => { const n = new Date(); sel = {y:n.getFullYear(), m:n.getMonth(), d:n.getDate()}; vm = sel.y*12 + sel.m; timeIn.value = fmtTime(n); drawCal(); });
     draw(); drawCal();
-    sh.querySelector('#gPick').addEventListener('click', ev => { const b = ev.target.closest('[data-pg]'); if(b && b.dataset.pg !== gid){ gid = b.dataset.pg; tags = new Set(); draw(); drawCal(); } });
+    sh.querySelector('#gPick').addEventListener('click', ev => { if(ev.target.closest('[data-cycp]')){ setTimeout(cycleQuick, 0); return; } const b = ev.target.closest('[data-pg]'); if(b && b.dataset.pg !== gid){ gid = b.dataset.pg; tags = new Set(); draw(); drawCal(); } });
     sh.querySelector('#tagPick').addEventListener('click', ev => {
       const b = ev.target.closest('[data-t]');
       if(b){ const t = b.dataset.t; tags.has(t) ? tags.delete(t) : tags.add(t); b.classList.toggle('on', tags.has(t)); return; }
@@ -1580,9 +1583,11 @@ function sessionSheet(opts){
 }
 
 // Period dates: tap the first day, then the last (one tap = still going)
-function cycleSheet(editId){
+// From the + sheet: ongoing period → open it (tap the last day to end it); otherwise a new one starting today
+function cycleQuick(){ const st = cycStatus(); if(st.cur && !st.cur.c.to) cycleSheet(st.cur.c.id); else cycleSheet(null, ymd(new Date())); }
+function cycleSheet(editId, startK){
   const c = editId ? db.cycles.find(x => x.id === editId) : null;
-  let a = c ? c.from : null, b = c ? c.to : null;
+  let a = c ? c.from : (startK || null), b = c ? c.to : null;
   const t0 = a ? dayT(a) : Date.now(), d0 = new Date(t0);
   let vm = d0.getFullYear()*12 + d0.getMonth();
   const st = cycStatus();
