@@ -60,6 +60,17 @@
   Hand, #F7F8FA ground, white cards, #2F6FE4 accent).
 
   CHANGELOG
+  v1.10.0 — Her period: db.cycles [{id, from, to|null}] ('YYYY-MM-DD', to null =
+           still going, counted for at most CYC_OPEN_MAX days) and db.cycle
+           {g, exclude}. Applies to one group only (Settings → Period; default
+           the group named Sex). Now: period card (Started / Ended today, Dates…,
+           rough next-start estimate from the average of the last 6 cycle
+           lengths) and a note on that group's counters when the current gap
+           includes period days. "Skip period days" chip takes period days out
+           of every gap (gapMs) for that group. Charts: "Around her cycle" card
+           (chance of a session by cycle day, on vs off period, long gaps that
+           included a period). Period days shaded in the log calendar; month
+           drill-down lists them. Baseline "+ period" chip renamed "+ custom".
   v1.9.1 — Filters survive closing the app: Charts tag selection is kept
            encrypted with the vault key (UIX_KEY, so no tag names in plain
            storage); Avg/Raw overlay toggle saved with the rest of the UI state.
@@ -139,7 +150,7 @@
 <link rel="manifest" href="manifest.webmanifest?v=3">
 <link rel="icon" type="image/png" href="icon-192.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
-<title>Tally v1.9.1</title>
+<title>Tally v1.10.0</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Patrick+Hand&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -148,7 +159,7 @@
     --bg:#F7F8FA; --surface:#FFFFFF; --surface-2:#EEF1F5; --line:#D7DCE3;
     --paper:#26313F; --paper-dim:#5b6b7d; --muted:#6b7a8c;
     --mustard:#2F6FE4; --mustard-dim:#1f4fb0; --rose:#F0703C; --today:#2FA84F; --gap:#e34948;
-    --inv-bg:#26313F; --inv-fg:#FFFFFF; --toast-link:#9fc0ff; --danger-line:#f1c2c2;
+    --inv-bg:#26313F; --inv-fg:#FFFFFF; --toast-link:#9fc0ff; --danger-line:#f1c2c2; --cyc:#C94F7C;
     --radius:14px; color-scheme:light;
   }
   /* Dark theme — same palette as the Home dashboard */
@@ -156,7 +167,7 @@
     --bg:#12161C; --surface:#1B2129; --surface-2:#232B35; --line:#313B47;
     --paper:#E6EBF1; --paper-dim:#A8B4C2; --muted:#8392A3;
     --mustard:#5B8FF0; --mustard-dim:#8DB1F5; --rose:#F2865A; --today:#4CC06B; --gap:#F06A69;
-    --inv-bg:#E6EBF1; --inv-fg:#12161C; --toast-link:#1f4fb0; --danger-line:#5a2b2b;
+    --inv-bg:#E6EBF1; --inv-fg:#12161C; --toast-link:#1f4fb0; --danger-line:#5a2b2b; --cyc:#E486A8;
     color-scheme:dark;
   }
   *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
@@ -313,6 +324,19 @@
   .cal-g .d.sel{background:var(--mustard); color:#fff; box-shadow:none;}
   .cal-g .d.has::after{content:''; position:absolute; bottom:5px; left:50%; width:5px; height:5px; margin-left:-2.5px; border-radius:50%; background:var(--c);}
   .cal-g .d.sel.has::after{background:#fff;}
+  .cal-g .d.pd:not(.sel){background:color-mix(in srgb, var(--cyc) 22%, transparent);}
+  .cal-g .d.pr:not(.sel){background:color-mix(in srgb, var(--cyc) 55%, transparent); color:#fff;}
+  #ycal .d.sel{background:var(--cyc);}
+  /* her period */
+  .cyc{border-left:5px solid var(--cyc); display:grid; gap:8px; padding:12px 14px;}
+  .cyc-line{font-size:13.5px; color:var(--paper-dim); line-height:1.4;}
+  .cyc-line b{color:var(--paper);}
+  .cyc-note{display:flex; align-items:center; gap:7px; font-size:12.5px; color:var(--paper-dim);}
+  .cyc-note::before{content:''; width:8px; height:8px; border-radius:50%; background:var(--cyc); flex:none;}
+  .chip.cyc-t.on{background:var(--cyc); border-color:var(--cyc); color:#fff;}
+  .cyc-row{display:flex; justify-content:space-between; gap:10px; align-items:center; padding:9px 12px; border-top:1px solid var(--surface-2); width:100%; background:none; border-left:0; border-right:0; border-bottom:0; font:inherit; color:inherit; text-align:left; cursor:pointer;}
+  .cyc-row:first-child{border-top:0;}
+  .cyc-row .mono{font-family:'IBM Plex Mono',monospace; font-size:11.5px; color:var(--paper-dim);}
   .time-row{display:flex; gap:8px; align-items:center;}
   .time-row input{flex:1; font:600 17px 'IBM Plex Mono',monospace; padding:9px 11px; border-radius:10px; border:1px solid var(--line); background:var(--surface); color:var(--paper); min-width:0;}
   .sec{font-family:'IBM Plex Mono',monospace; font-size:10.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); margin:6px 0 -6px; border-top:1px solid var(--surface-2); padding-top:12px;}
@@ -364,7 +388,7 @@
   <div class="title-row">
     <h1 class="title">Tally</h1>
     <div class="title-right">
-      <span class="version-badge">v1.9.1</span>
+      <span class="version-badge">v1.10.0</span>
       <button class="icon-btn" id="themeBtn" aria-label="Switch light or dark theme"></button>
       <button class="icon-btn" id="openSettings" aria-label="Settings">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
@@ -384,7 +408,7 @@
 
 <script>
 'use strict';
-const VERSION = '1.9.1';
+const VERSION = '1.10.0';
 const STORE_KEY = 'tally.v1';
 const UI_KEY = 'tally.ui';
 const UIX_KEY = 'tally.uix';      // encrypted UI state that names tags {iv, ct}
@@ -405,7 +429,8 @@ const FAIL_KEY = 'tally.fails';
 const LOCK_AFTER = 60000;
 const PBKDF2_ITER = 310000;
 
-const emptyDb = () => ({groups:[], sessions:[], counters:[], periods:[]});
+const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
+const emptyDb = () => ({groups:[], sessions:[], counters:[], periods:[], cycles:[], cycle:{g:null, exclude:false}});
 let db = emptyDb();
 let ui = Object.assign({tab:'now', cg:null, ctag:null, crange:'all', mixRange:'12m', lg:'all', q:'', limit:120}, loadUI());
 ui.limit = 120; ui.q = '';
@@ -415,7 +440,9 @@ function normalize(d){
   return {groups: Array.isArray(d.groups) ? d.groups.map(g => { g = Object.assign({tags:[]}, g); if(g.noAll === undefined) g.noAll = /mast[eu]?rbat/i.test(g.name || ''); return g; }) : [],
           sessions: Array.isArray(d.sessions) ? d.sessions.map(s => Object.assign({tags:[], note:''}, s)).sort((a,b) => b.t - a.t) : [],
           counters: Array.isArray(d.counters) ? d.counters.map(fixCounter).filter(Boolean) : [],
-          periods: Array.isArray(d.periods) ? d.periods : []};
+          periods: Array.isArray(d.periods) ? d.periods : [],
+          cycles: Array.isArray(d.cycles) ? d.cycles.filter(c => c && c.id && YMD_RE.test(c.from) && (c.to == null || YMD_RE.test(c.to))).map(c => ({id:c.id, from:c.from, to:c.to || null})) : [],
+          cycle: d.cycle && typeof d.cycle === 'object' ? {g: d.cycle.g || null, exclude: !!d.cycle.exclude} : {g:null, exclude:false}};
 }
 // Counters watch one or more TAGS (never a whole group). Older counters had a single
 // `tag` (or null = any session in the group); null ones are dropped by design.
@@ -505,7 +532,7 @@ function setSync(err){
 }
 function mergeDb(local, remote){
   const byId = (a, b) => { const m = new Map(); b.forEach(x => m.set(x.id, x)); a.forEach(x => m.set(x.id, x)); return [...m.values()]; };
-  const out = normalize({groups: byId(local.groups, remote.groups), sessions: byId(local.sessions, remote.sessions), counters: local.counters.length ? local.counters : remote.counters, periods: byId(local.periods||[], remote.periods||[])});
+  const out = normalize({groups: byId(local.groups, remote.groups), sessions: byId(local.sessions, remote.sessions), counters: local.counters.length ? local.counters : remote.counters, periods: byId(local.periods||[], remote.periods||[]), cycles: byId(local.cycles||[], remote.cycles||[]), cycle: local.cycle});
   out.groups.forEach(g => { const rg = remote.groups.find(x => x.id === g.id); if(rg) rg.tags.forEach(t => ensureTag(g, t)); });
   return out;
 }
@@ -687,6 +714,58 @@ function defaultCounters(){
 const ctrLabel = c => c.tags.join(' or ');
 function tagCounts(gid){ const m = new Map(); db.sessions.forEach(s => { if(s.g === gid) s.tags.forEach(t => m.set(t, (m.get(t)||0)+1)); }); return m; }
 
+/* ───────── her period ─────────
+   db.cycles [{id, from, to}] as local 'YYYY-MM-DD' days; to null = still going.
+   db.cycle {g, exclude}: the one group it applies to ('off' = none, null = the group named Sex)
+   and whether period days are taken out of gaps for that group. */
+const CYC_OPEN_MAX = 10;   // an open-ended period counts for at most this many days
+const CYC_MAX_LEN = 60;    // cycles longer than this (missed logging, pregnancy) are left out of averages
+const ymd = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+const dayT = k => { const [y,m,d] = k.split('-').map(Number); return new Date(y, m-1, d).getTime(); };
+const addDays = (t, n) => { const d = new Date(t); d.setDate(d.getDate() + n); return d.getTime(); };
+const todayT = () => dayT(ymd(new Date()));
+const daysBetween = (a, b) => Math.round((b - a) / DAY);
+const fmtDay = t => { const d = new Date(t); return `${DOW[d.getDay()]} ${d.getDate()} ${MON[d.getMonth()]}`; };
+function cycG(){
+  const c = db.cycle || {};
+  if(c.g === 'off') return null;
+  if(c.g && grp(c.g)) return c.g;
+  const g = db.groups.find(x => /^sex\b/i.test(x.name.trim()));
+  return g ? g.id : null;
+}
+// spans [{c, a, b}]: a = start of first day, b = start of the day after the last (ongoing → now, capped)
+function cycSpans(){
+  const now = Date.now();
+  return db.cycles.map(c => {
+    const a = dayT(c.from);
+    const b = c.to ? addDays(dayT(c.to), 1) : Math.min(Math.max(now, a), addDays(a, CYC_OPEN_MAX));
+    return {c, a, b: Math.max(a, b)};
+  }).sort((x, y) => x.a - y.a);
+}
+function cycOverlap(t1, t2, spans){ let o = 0; (spans || cycSpans()).forEach(p => { const a = Math.max(t1, p.a), b = Math.min(t2, p.b); if(b > a) o += b - a; }); return o; }
+const cycOn = gid => !!gid && gid === cycG() && db.cycles.length > 0;
+const exOn = gid => cycOn(gid) && !!(db.cycle && db.cycle.exclude);
+// gap between two moments for a group's sessions — period days left out when "Skip period days" is on
+const gapMs = (t1, t2, gid) => Math.max(0, t2 - t1 - (exOn(gid) ? cycOverlap(t1, t2) : 0));
+function cycStatus(){
+  const sp = cycSpans(), now = Date.now(), today = todayT();
+  const cur = sp.find(p => p.c.to ? now >= p.a && now < p.b : now >= p.a && now < addDays(p.a, CYC_OPEN_MAX)) || null;
+  const lens = []; for(let i = 1; i < sp.length; i++){ const L = daysBetween(sp[i-1].a, sp[i].a); if(L >= 15 && L <= CYC_MAX_LEN) lens.push(L); }
+  const recent = lens.slice(-6), avgLen = recent.length ? recent.reduce((a,b) => a+b, 0) / recent.length : null;
+  const durs = sp.filter(p => p.c.to).map(p => daysBetween(p.a, p.b)).slice(-6).sort((a,b) => a-b);
+  const dur = durs.length ? durs[Math.floor(durs.length/2)] : null;
+  const last = sp[sp.length-1] || null;
+  const next = last && avgLen ? addDays(last.a, Math.round(avgLen)) : null;
+  return {sp, cur, day: cur ? daysBetween(cur.a, today) + 1 : null, avgLen, dur, next, last, today,
+          unended: !!(last && !last.c.to && !cur)};
+}
+// period days in a month: Map(day of month → span)
+function cycDaysIn(y, m){
+  const out = new Map(), a0 = new Date(y, m, 1).getTime(), b0 = new Date(y, m+1, 1).getTime();
+  cycSpans().forEach(p => { for(let t = Math.max(p.a, a0); t < Math.min(p.b, b0); t = addDays(t, 1)) out.set(new Date(t).getDate(), p); });
+  return out;
+}
+
 /* ───────── helpers ───────── */
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pad = n => String(n).padStart(2,'0');
@@ -785,7 +864,8 @@ function quant(sorted, q){ if(!sorted.length) return 0; const i = (sorted.length
 // ssAsc: sessions oldest→newest. Gaps counted between consecutive sessions that both fall inside the period.
 function baseline(ssAsc, per){
   const to = per.to || Infinity, inP = ssAsc.filter(s => s.t >= per.from && s.t < to);
-  const gaps = []; for(let i = 1; i < inP.length; i++) gaps.push(inP[i].t - inP[i-1].t);
+  const gid = inP.length ? inP[0].g : null, sp = exOn(gid) ? cycSpans() : null;
+  const gaps = []; for(let i = 1; i < inP.length; i++) gaps.push(Math.max(0, inP[i].t - inP[i-1].t - (sp ? cycOverlap(inP[i-1].t, inP[i].t, sp) : 0)));
   const g = gaps.slice().sort((a,b) => a-b);
   return {n:inP.length, gaps, sorted:g, med:quant(g,.5), p25:quant(g,.25), p75:quant(g,.75), p90:quant(g,.9), max:g[g.length-1]||0, mean:g.length ? g.reduce((a,b)=>a+b,0)/g.length : 0};
 }
@@ -808,23 +888,29 @@ function normBlock(ssAsc, color, cur){
   return `<div class="norm" style="--c:${color}">
     <div class="norm-line"><b>${head}</b> · ${sub}</div>
     <div class="nbar" aria-hidden="true"><span class="band" style="left:${at(b.p25)}%;width:${(at(b.p75)-at(b.p25)).toFixed(1)}%"></span><span class="med" style="left:${at(b.mean)}%"></span><span class="cur" style="left:${at(cur)}%"></span></div>
-    <div class="norm-sub">Average ${avg} days · usual ${dd(b.p25)}–${dd(b.p75)} · typical ${dd(b.med)} <span class="muted">(${esc(per.short)})</span></div>
+    <div class="norm-sub">Average ${avg} days · usual ${dd(b.p25)}–${dd(b.p75)} · typical ${dd(b.med)} <span class="muted">(${esc(per.short)}${exOn(ssAsc.length ? ssAsc[0].g : null) ? ', period days left out' : ''})</span></div>
   </div>`;
 }
 function periodChips(){
   const cur = curPeriod();
-  return `<div class="chips per" data-ck="per">${periodList().map(p => `<button class="chip ${p.id===cur.id?'on':''}" data-act="period" data-p="${p.id}">${esc(p.chip || p.name)}</button>`).join('')}<button class="chip add" data-act="newPeriod">+ period</button></div>`;
+  return `<div class="chips per" data-ck="per">${periodList().map(p => `<button class="chip ${p.id===cur.id?'on':''}" data-act="period" data-p="${p.id}">${esc(p.chip || p.name)}</button>`).join('')}<button class="chip add" data-act="newPeriod">+ custom</button></div>${cycToggle()}`;
+}
+function cycToggle(){
+  const gid = ui.tab === 'now' ? cycG() : ui.cg;
+  if(!cycOn(gid)) return '';
+  const on = exOn(gid);
+  return `<div class="chips" style="margin-top:6px"><button class="chip cyc-t ${on ? 'on' : ''}" data-act="cycEx" aria-pressed="${on}">${on ? '✓ ' : ''}Skip period days</button></div>`;
 }
 function periodSheet(){
-  openSheet(`<div class="sheet-head"><h3>Custom period</h3><button class="x" data-close aria-label="Close">✕</button></div>
+  openSheet(`<div class="sheet-head"><h3>Custom range</h3><button class="x" data-close aria-label="Close">✕</button></div>
     <p class="help">Name a stretch of time to compare against — for example "Before Vivian". Leave "to" empty to run up to today.</p>
     <label class="field"><span>Name</span><input type="text" id="pN" placeholder="e.g. Before Vivian" autocomplete="off"></label>
     <div class="two" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
       <label class="field"><span>From (month)</span><input type="month" id="pF"></label>
       <label class="field"><span>To (month, optional)</span><input type="month" id="pT"></label>
     </div>
-    <button class="btn primary block" id="pSave">Save period</button>
-    ${db.periods.length ? `<p class="sec">Your periods</p><div style="display:grid;gap:6px">${db.periods.map(p => `<div class="srow" style="grid-template-columns:minmax(0,1fr) auto"><span style="font-size:14px"><b>${esc(p.name)}</b> <span class="muted" style="font-size:12px">${esc(p.from)} → ${esc(p.to||'now')}</span></span><button class="x" data-pdel="${p.id}" aria-label="Delete">✕</button></div>`).join('')}</div>` : ''}`, sh => {
+    <button class="btn primary block" id="pSave">Save range</button>
+    ${db.periods.length ? `<p class="sec">Your ranges</p><div style="display:grid;gap:6px">${db.periods.map(p => `<div class="srow" style="grid-template-columns:minmax(0,1fr) auto"><span style="font-size:14px"><b>${esc(p.name)}</b> <span class="muted" style="font-size:12px">${esc(p.from)} → ${esc(p.to||'now')}</span></span><button class="x" data-pdel="${p.id}" aria-label="Delete">✕</button></div>`).join('')}</div>` : ''}`, sh => {
     sh.querySelector('#pSave').onclick = () => {
       const name = sh.querySelector('#pN').value.trim(), from = sh.querySelector('#pF').value, to = sh.querySelector('#pT').value;
       if(!name || !from){ toast('Give it a name and a start month'); return; }
@@ -855,11 +941,12 @@ function renderNow(){
       </div>
       <div class="since" ${last ? `data-since="${last.t}"` : ''}>${last ? sinceHTML(last.t) : '—'}</div>
       <div class="last">${last ? `${fmtDate(last.t)} · ${fmtTime(last.t)}` : 'Nothing logged yet'}</div>
-      ${last ? normBlock(ss.slice().reverse(), c.color, Date.now() - last.t) : ''}
+      ${last ? normBlock(ss.slice().reverse(), c.color, gapMs(last.t, Date.now(), c.g)) : ''}
+      ${last && cycOn(c.g) ? cycCtrNote(last.t) : ''}
       ${last && last.tags.length ? `<div class="mini-tags">${last.tags.map(t => `<span class="mt ${c.tags.includes(t)?'hl':''}">${esc(t)}</span>`).join('')}</div>` : ''}
       <div class="meta"><span>this month <b>${m}</b></span><span>${yr} <b>${y}</b></span><span>all time <b>${ss.length}</b></span></div>
     </section>`;
-  }).join('') + '</div>' + `<p class="help" style="text-align:center">Each card counts sessions with its tag. Hold a card to move it; set them up in Settings.</p>`;
+  }).join('') + '</div>' + cycCard() + `<p class="help" style="text-align:center">Each card counts sessions with its tag. Hold a card to move it; set them up in Settings.</p>`;
   makeSortable(document.getElementById('sortNow'), keys => {
     if(db.counters.length) db.counters.sort((a,b) => keys.indexOf(a.id) - keys.indexOf(b.id));
     else db.groups.sort((a,b) => keys.indexOf('g'+a.id) - keys.indexOf('g'+b.id));
@@ -870,6 +957,38 @@ function renderNow(){
     view.querySelectorAll('[data-since]').forEach(el => el.innerHTML = sinceHTML(+el.dataset.since));
     if(++n % 300 === 0 && !sheetEl && !dragging) render();   // refresh the "normal" bars every 5 min
   }, 1000);
+}
+
+function cycCtrNote(lastT){
+  const st = cycStatus(), n = cycOverlap(lastT, Date.now(), st.sp) / DAY;
+  if(st.cur) return `<div class="cyc-note">On her period · day ${st.day}</div>`;
+  if(n >= 1) return `<div class="cyc-note">This gap includes ${Math.round(n)} period day${Math.round(n) === 1 ? '' : 's'}</div>`;
+  return '';
+}
+function cycCard(){
+  if(!cycG()) return '';
+  const st = cycStatus(), today = st.today;
+  let line, btns;
+  if(st.cur){
+    const ends = st.cur.c.to ? dayT(st.cur.c.to) : null;
+    line = `<b>Day ${st.day}</b> · started ${fmtDay(st.cur.a)}${ends ? (ends > today ? ` · until ${fmtDay(ends)}` : ' · last day today') : st.dur ? ` · usually ${st.dur} days` : ''}`;
+    btns = st.cur.c.to ? '' : `<button class="btn sm primary" data-act="cycEnd" style="background:var(--cyc);border-color:var(--cyc)">Ended today</button>`;
+  } else {
+    if(st.next){
+      const dn = daysBetween(today, st.next);
+      line = dn > 1 ? `Next one expected around <b>${fmtDay(st.next)}</b> · in about ${dn} days`
+           : dn >= -2 ? `Next one expected around <b>${fmtDay(st.next)}</b> — could start any day`
+           : `Expected around ${fmtDay(st.next)} — a little late, which is common`;
+    } else line = st.last ? 'Log a couple more and Tally will estimate the next one.' : 'Log her period and it will show how it lines up with the quieter stretches.';
+    if(st.unended) line += `<br><span class="muted">The last one (${fmtDay(st.last.a)}) has no end day — tap Dates to add it.</span>`;
+    btns = `<button class="btn sm primary" data-act="cycStart" style="background:var(--cyc);border-color:var(--cyc)">Started today</button>`;
+  }
+  const meta = [st.avgLen ? `cycle <b>${Math.round(st.avgLen)}</b> days on average` : '', st.dur ? `lasts about <b>${st.dur}</b> days` : '', st.sp.length ? `<b>${st.sp.length}</b> logged` : ''].filter(Boolean);
+  return `<section class="card cyc">
+    <div class="ctr-top"><div class="ctr-name">Period</div><span class="btns">${btns}<button class="btn sm" data-act="cycDates">Dates…</button></span></div>
+    <div class="cyc-line">${line}</div>
+    ${meta.length ? `<div class="meta">${meta.map(x => `<span>${x}</span>`).join('')}</div>` : ''}
+  </section>`;
 }
 
 /* LONG-PRESS DRAG TO REORDER
@@ -957,7 +1076,7 @@ function drillSet(spec){
   else if(kind === 'gap'){
     const [a,b] = GAP_BUCKETS[+arg], per = curPeriod(), to = per.to || Infinity, inP = c.ss.filter(s => s.t >= per.from && s.t < to);
     gapOf = new Map(); list = [];
-    for(let i = 1; i < inP.length; i++){ const gd = (inP[i].t - inP[i-1].t)/DAY; if(gd >= a && gd < b){ list.push(inP[i]); gapOf.set(inP[i], gd); } }
+    for(let i = 1; i < inP.length; i++){ const gd = gapMs(inP[i-1].t, inP[i].t, c.g.id)/DAY; if(gd >= a && gd < b){ list.push(inP[i]); gapOf.set(inP[i], gd); } }
     title = `Gaps of ${GAP_NAMES[+arg]}`; note = per.short;
   }
   return {list: list.slice().sort((a,b) => b.t - a.t), title, note, gapOf, year};
@@ -966,8 +1085,14 @@ function drillSheet(spec, stack){
   stack = (stack || []).concat(spec);
   const c = chartCtx, d = drillSet(spec); if(!d) return;
   const col = c.g.color, asc = d.list.slice().reverse();
-  const gaps = []; for(let i = 1; i < asc.length; i++) gaps.push(asc[i].t - asc[i-1].t);
+  const gaps = []; for(let i = 1; i < asc.length; i++) gaps.push(gapMs(asc[i-1].t, asc[i].t, c.g.id));
   const sg = gaps.slice().sort((a,b) => a-b);
+  let cycLine = '';
+  if(spec.startsWith('m:') && cycOn(c.g.id)){
+    const k = +spec.slice(2), ma = new Date(Math.floor(k/12), k%12, 1).getTime(), mb = new Date(Math.floor(k/12), k%12 + 1, 1).getTime();
+    const hits = cycSpans().filter(p => p.a < mb && p.b > ma);
+    if(hits.length) cycLine = `<div class="cyc-note">Period ${hits.map(p => `${fmtDay(p.a)} → ${p.c.to ? fmtDay(dayT(p.c.to)) : 'still going'}`).join(' · ')}</div>`;
+  }
   const tagN = new Map(); d.list.forEach(s => s.tags.forEach(t => tagN.set(t, (tagN.get(t)||0)+1)));
   const tagRows = [...tagN.entries()].sort((a,b) => b[1]-a[1]).slice(0, 8);
   let months = '';
@@ -999,6 +1124,7 @@ function drillSheet(spec, stack){
       <div class="stat"><span class="k">Sessions</span><span class="v">${d.list.length}</span></div>
       <div class="stat"><span class="k">Average gap</span><span class="v">${sg.length >= 2 ? dd(sg.reduce((a,b)=>a+b,0)/sg.length) + ' d' : '–'}</span><span class="s">${sg.length >= 4 ? `typical ${dd(quant(sg,.5))} · usual ${dd(quant(sg,.25))}–${dd(quant(sg,.75))} d` : 'between these'}</span></div>
     </div>
+    ${cycLine}
     ${months}
     ${tagRows.length ? `<div><div class="lbl" style="margin-bottom:4px">Tags in these sessions</div>${hbars(tagRows.map(([t,v]) => [esc(t), v]), col, d.list.length)}</div>` : ''}
     <div style="display:grid;gap:10px">${rows || '<p class="help">No sessions.</p>'}</div>
@@ -1039,9 +1165,9 @@ function svgBars(labels, vals, color, h=170, hi=-1, drill=null){
   for(let v = 0; v <= top + 1e-9; v += step) g += `<line class="grid" x1="${L}" x2="${W-R}" y1="${y(v)}" y2="${y(v)}"/><text class="ax" x="${L-5}" y="${y(v)+3}" text-anchor="end">${v}</text>`;
   vals.forEach((v,i) => {
     const x0 = L + i*bw + bw*0.14, w = bw*0.72;
-    if(v > 0) g += `<rect x="${x0}" y="${y(v)}" width="${w}" height="${y(0)-y(v)}" rx="3" fill="${color}" opacity="${hi>=0 && i!==hi ? .55 : 1}"/>`;
+    if(v > 0) g += `<rect x="${x0}" y="${y(v)}" width="${w}" height="${y(0)-y(v)}" rx="3" fill="${Array.isArray(color) ? color[i] : color}" opacity="${hi>=0 && i!==hi ? .55 : 1}"/>`;
     if(v > 0 && n <= 14) g += `<text class="ax" x="${x0+w/2}" y="${y(v)-3}" text-anchor="middle" style="fill:var(--paper)">${+v.toFixed(1)}</text>`;
-    g += `<text class="ax" x="${x0+w/2}" y="${H-6}" text-anchor="middle">${esc(labels[i])}</text>`;
+    if(labels[i] !== '') g += `<text class="ax" x="${x0+w/2}" y="${H-6}" text-anchor="middle">${esc(labels[i])}</text>`;
   });
   g += `<line class="base" x1="${L}" x2="${W-R}" y1="${y(0)}" y2="${y(0)}"/>`;
   if(drill) vals.forEach((v,i) => { if(drill[i] && v > 0) g += `<rect class="hit" x="${L + i*bw}" y="0" width="${bw}" height="${H}" data-act="drill" data-d="${esc(drill[i])}"/>`; });
@@ -1088,8 +1214,8 @@ function renderCharts(){
   const d = new Date(), yr = d.getFullYear(), ytdM = d.getMonth() + 1;
   const thisYr = ss.filter(s => new Date(s.t).getFullYear() === yr).length;
   const lastYrSame = ss.filter(s => { const x = new Date(s.t); return x.getFullYear() === yr-1 && x.getMonth() < ytdM && (x.getMonth() < ytdM-1 || x.getDate() <= d.getDate()); }).length;
-  const gaps = []; for(let i = 1; i < ss.length; i++) gaps.push(ss[i].t - ss[i-1].t);
-  const cur = now - ss[ss.length-1].t;
+  const gaps = []; for(let i = 1; i < ss.length; i++) gaps.push(gapMs(ss[i-1].t, ss[i].t, g.id));
+  const cur = gapMs(ss[ss.length-1].t, now, g.id);
   const longest = Math.max(cur, ...gaps, 0);
   const sorted = gaps.slice().sort((a,b) => a-b), med = sorted.length ? sorted[Math.floor(sorted.length/2)] : 0;
   const last12k = []; for(let k = nowK-11; k <= nowK; k++) last12k.push(k);
@@ -1111,6 +1237,7 @@ function renderCharts(){
   const per = curPeriod(), bl = baseline(ss, per);
   const blocks = {};
   blocks.gaps = gapsCard(ss, bl, per, cur, color);
+  blocks.cycle = cycOn(g.id) ? cycChart(ss, bl, color) : '';
   blocks.stats = `
   <div class="stats">
     <div class="stat"><span class="k">${yr} so far</span><span class="v">${thisYr}</span><span class="s">${(thisYr/ytdM).toFixed(1)}/month · same point ${yr-1}: ${lastYrSame}</span></div>
@@ -1191,7 +1318,7 @@ function overlayBlocks(g, tags, tcol){
   const S = tags.map(t => {
     const ss = all.filter(s => s.tags.includes(t)), counts = new Map();
     ss.forEach(s => { const k = monthKey(s.t); counts.set(k, (counts.get(k)||0)+1); });
-    return {t, ss, color: tcol(t), counts, bl: baseline(ss, per), cur: ss.length ? now - ss[ss.length-1].t : null};
+    return {t, ss, color: tcol(t), counts, bl: baseline(ss, per), cur: ss.length ? gapMs(ss[ss.length-1].t, now, g.id) : null};
   });
   const union = all.filter(s => tags.some(t => s.tags.includes(t)));
   chartCtx = {g, ss: union, what: tags.join(' + '), ctag: null, hl: tags, mixFrom: union, mixLabel: 'all time'};
@@ -1258,7 +1385,7 @@ function overlayBlocks(g, tags, tcol){
 }
 const GAP_BUCKETS = [[0,3,'0–3'],[3,7,'4–7'],[7,14,'1–2w'],[14,21,'2–3w'],[21,31,'3–4w'],[31,Infinity,'4w+']];
 const GAP_NAMES = ['up to 3 days','4–7 days','1–2 weeks','2–3 weeks','3–4 weeks','over 4 weeks'];
-const CHART_KEYS = ['stats','gaps','month','last12','year','dow','tod','mix'];
+const CHART_KEYS = ['stats','gaps','cycle','month','last12','year','dow','tod','mix'];
 function gapsCard(ss, bl, per, cur, color){
   const B = GAP_BUCKETS;
   const counts = B.map(([a,b]) => bl.gaps.filter(g => g/DAY >= a && g/DAY < b).length);
@@ -1275,6 +1402,41 @@ function gapsCard(ss, bl, per, cur, color){
       <p class="help" style="margin:2px 0 0;text-align:center">How long gaps lasted · darker bar = where today's gap sits</p>` : `<p class="help" style="margin-top:8px">Not enough sessions in ${esc(per.short)}.</p>`}
     ${ys.length > 1 ? `<div class="card-h" style="margin:14px 0 4px"><h2 style="font-size:18px">Typical gap by year</h2><span class="sub">days</span></div>
       ${svgBars(ys.map(y => "'" + String(y).slice(2)), yMed, color, 130, ys.indexOf(new Date().getFullYear()), ys.map(y => 'y:'+y))}` : ''}
+  </section>`;
+}
+// "Around her cycle": how sessions line up with her period (single-tag/all view of the period group)
+function cycChart(ss, bl, color){
+  const sp = cycSpans(); if(!sp.length) return '';
+  const now = Date.now(), from = sp[0].a, inR = ss.filter(s => s.t >= from);
+  const N = 35, reach = new Array(N).fill(0), hit = new Array(N).fill(0);
+  sp.forEach((p, i) => {
+    const end = Math.min(i + 1 < sp.length ? sp[i+1].a : now, addDays(p.a, N));
+    if(i + 1 < sp.length && daysBetween(p.a, sp[i+1].a) > CYC_MAX_LEN) return;   // skip broken cycles
+    const days = new Set(inR.filter(s => s.t >= p.a && s.t < end).map(s => daysBetween(p.a, dayT(ymd(new Date(s.t))))));
+    for(let d = 0; d < N && addDays(p.a, d) < end; d++){ reach[d]++; if(days.has(d)) hit[d]++; }
+  });
+  const pctDay = reach.map((r, d) => r >= 2 ? Math.round(hit[d] / r * 100) : 0);
+  const usual = cycStatus().dur || 5;
+  const cols = pctDay.map((_, d) => d < usual ? 'var(--cyc)' : color);
+  const labels = pctDay.map((_, d) => [0, 6, 13, 20, 27, 34].includes(d) ? String(d + 1) : '');
+  // on vs off period, per week
+  const perMs = cycOverlap(from, now, sp), offMs = Math.max(DAY, now - from - perMs);
+  const onN = inR.filter(s => sp.some(p => s.t >= p.a && s.t < p.b)).length, offN = inR.length - onN;
+  const rate = (n, ms) => (n / (ms / (7*DAY))).toFixed(1);
+  // longer-than-average gaps that included period days
+  const longG = [], avg = bl.gaps.length ? bl.mean : 0;
+  for(let i = 1; i < inR.length; i++){ if(avg && gapMs(inR[i-1].t, inR[i].t, inR[i].g) > avg) longG.push(cycOverlap(inR[i-1].t, inR[i].t, sp) >= DAY); }
+  const withP = longG.filter(Boolean).length;
+  return `<section class="card">
+    <div class="card-h"><h2>Around her cycle</h2><span class="sub">since ${fmtDay(from)} ${new Date(from).getFullYear()}</span></div>
+    <div class="stats" style="margin-bottom:10px">
+      <div class="stat"><span class="k">On her period</span><span class="v">${rate(onN, perMs || DAY)}</span><span class="s">a week · ${onN} session${onN === 1 ? '' : 's'}</span></div>
+      <div class="stat"><span class="k">Other days</span><span class="v">${rate(offN, offMs)}</span><span class="s">a week · ${offN} session${offN === 1 ? '' : 's'}</span></div>
+    </div>
+    ${longG.length ? `<p class="help" style="margin:0 0 8px"><b>${withP} of ${longG.length}</b> longer-than-average gaps included period days.</p>` : ''}
+    <div class="lbl" style="margin-bottom:2px">Chance of a session, by day of her cycle (%)</div>
+    ${svgBars(labels, pctDay, cols, 150, -1)}
+    <div class="legend"><span><i style="--c:var(--cyc)"></i>usual period days</span><span><i style="--c:${color}"></i>rest of the cycle</span></div>
   </section>`;
 }
 function chartOrder(){
@@ -1367,6 +1529,7 @@ function sessionSheet(opts){
       const now = new Date(), nowK = now.getFullYear()*12 + now.getMonth(), todayKey = dayKey(now.getFullYear(), now.getMonth(), now.getDate());
       const y = Math.floor(vm/12), m = vm%12, g = grp(gid);
       const has = new Set(); db.sessions.forEach(x => { if(x.g === gid && x !== s){ const q = new Date(x.t); if(q.getFullYear() === y && q.getMonth() === m) has.add(q.getDate()); } });
+      const pdays = gid === cycG() ? cycDaysIn(y, m) : new Map();
       const lead = (new Date(y, m, 1).getDay() + 6) % 7, days = new Date(y, m+1, 0).getDate();
       let cells = ['M','T','W','T','F','S','S'].map(x => `<span class="dh">${x}</span>`).join('') + '<span></span>'.repeat(lead);
       for(let d = 1; d <= days; d++){
@@ -1374,6 +1537,7 @@ function sessionSheet(opts){
         if(k === todayKey) cls.push('today');
         if(sel.y === y && sel.m === m && sel.d === d) cls.push('sel');
         if(has.has(d)) cls.push('has');
+        if(pdays.has(d)) cls.push('pd');
         cells += `<button class="${cls.join(' ')}" data-day="${d}" ${k > todayKey ? 'disabled' : ''}>${d}</button>`;
       }
       sh.querySelector('#cal').style.setProperty('--c', g.color);
@@ -1415,6 +1579,70 @@ function sessionSheet(opts){
   });
 }
 
+// Period dates: tap the first day, then the last (one tap = still going)
+function cycleSheet(editId){
+  const c = editId ? db.cycles.find(x => x.id === editId) : null;
+  let a = c ? c.from : null, b = c ? c.to : null;
+  const t0 = a ? dayT(a) : Date.now(), d0 = new Date(t0);
+  let vm = d0.getFullYear()*12 + d0.getMonth();
+  const st = cycStatus();
+  const list = st.sp.slice().reverse();
+  openSheet(`
+    <div class="sheet-head"><h3>${c ? 'Edit period' : 'Period'}</h3><button class="x" data-close aria-label="Close">✕</button></div>
+    <p class="help">Tap the first day, then the last. Leave it at one tap if it's still going.</p>
+    <div class="cal" id="ycal" style="--c:var(--cyc)"></div>
+    <p class="help" id="ySel" style="color:var(--paper)"></p>
+    <button class="btn primary block" id="ySave" style="background:var(--cyc);border-color:var(--cyc)">${c ? 'Save changes' : 'Save period'}</button>
+    ${c ? '<button class="btn danger block" id="yDel">Delete this period</button>' : ''}
+    ${!c && list.length ? `<p class="sec">Logged</p>
+      <p class="help">${st.avgLen ? `Cycle about <b>${Math.round(st.avgLen)} days</b> on average (last ${Math.min(6, st.sp.length - 1)})` : 'Not enough yet for an average cycle'}${st.dur ? ` · usually lasts <b>${st.dur} days</b>` : ''}. Tap one to change it.</p>
+      <div class="rows">${list.map((p, i) => { const nx = i > 0 ? list[i-1] : null; return `<button class="cyc-row" data-cy="${p.c.id}">
+        <span><b>${fmtDay(p.a)}</b> → ${p.c.to ? fmtDay(dayT(p.c.to)) : '<span class="muted">still going</span>'}</span>
+        <span class="mono">${p.c.to ? daysBetween(p.a, p.b) + ' d' : ''}${nx ? ` · cycle ${daysBetween(p.a, nx.a)} d` : ''}</span></button>`; }).join('')}</div>` : ''}
+  `, sh => {
+    const cal = sh.querySelector('#ycal');
+    const draw = () => {
+      const now = new Date(), nowK = now.getFullYear()*12 + now.getMonth(), tk = todayT();
+      const y = Math.floor(vm/12), m = vm%12, other = cycDaysIn(y, m);
+      const lead = (new Date(y, m, 1).getDay() + 6) % 7, days = new Date(y, m+1, 0).getDate();
+      const ta = a ? dayT(a) : null, tb = b ? dayT(b) : null;
+      let cells = ['M','T','W','T','F','S','S'].map(x => `<span class="dh">${x}</span>`).join('') + '<span></span>'.repeat(lead);
+      for(let d = 1; d <= days; d++){
+        const t = new Date(y, m, d).getTime(), cls = ['d'];
+        if(t === tk) cls.push('today');
+        if(t === ta || t === tb) cls.push('sel');
+        else if(ta != null && tb != null && t > ta && t < tb) cls.push('pr');
+        else if(other.has(d) && !(c && other.get(d).c === c)) cls.push('pd');
+        cells += `<button class="${cls.join(' ')}" data-day="${d}" ${t > tk ? 'disabled' : ''}>${d}</button>`;
+      }
+      cal.innerHTML = `<div class="cal-h"><button class="x" data-cm="-1" aria-label="Previous month">‹</button><span>${MONTHS[m]} ${y}</span><button class="x" data-cm="1" aria-label="Next month" ${vm >= nowK ? 'disabled' : ''}>›</button></div><div class="cal-g">${cells}</div>`;
+      sh.querySelector('#ySel').innerHTML = !a ? 'Pick the first day.' : b ? `<b>${fmtDay(dayT(a))} → ${fmtDay(dayT(b))}</b> · ${daysBetween(dayT(a), dayT(b)) + 1} days` : `<b>From ${fmtDay(dayT(a))}</b> · still going — tap the last day if it's over`;
+      sh.querySelector('#ySave').disabled = !a;
+    };
+    cal.addEventListener('click', ev => {
+      const cm = ev.target.closest('[data-cm]'); if(cm && !cm.disabled){ vm += +cm.dataset.cm; draw(); return; }
+      const bt = ev.target.closest('[data-day]'); if(!bt || bt.disabled) return;
+      const k = ymd(new Date(Math.floor(vm/12), vm%12, +bt.dataset.day));
+      if(!a || b || k < a){ a = k; b = null; } else b = k;
+      draw();
+    });
+    sh.querySelector('#ySave').addEventListener('click', () => {
+      if(!a) return;
+      const ta = dayT(a), tb = b ? addDays(dayT(b), 1) : Math.min(addDays(ta, CYC_OPEN_MAX), Math.max(Date.now(), ta + DAY));
+      const clash = cycSpans().find(p => p.c !== c && p.a < tb && p.b > ta);
+      if(clash){ toast(`Overlaps the one from ${fmtDay(clash.a)}`); return; }
+      if(c){ c.from = a; c.to = b; } else db.cycles.push({id:'c'+uid(), from:a, to:b});
+      save(); closeSheet(); render(); toast(c ? 'Period updated' : 'Period saved');
+    });
+    if(c) sh.querySelector('#yDel').addEventListener('click', () => {
+      db.cycles = db.cycles.filter(x => x !== c); save(); closeSheet(); render();
+      toast('Period deleted', 'Undo', () => { db.cycles.push(c); save(); render(); });
+    });
+    sh.querySelectorAll('[data-cy]').forEach(x => x.addEventListener('click', () => setTimeout(() => cycleSheet(x.dataset.cy), 0)));
+    draw();
+  });
+}
+
 function newGroupPrompt(){ const n = (prompt('Group name (e.g. Sex, Solo)') || '').trim(); if(n){ addGroup(n); save(); render(); } }
 
 function settingsSheet(){
@@ -1450,6 +1678,11 @@ function settingsSheet(){
     </div>
     <p class="help">Tap a tag to rename or remove it.</p>
     <button class="btn" id="gAdd">+ New group</button>
+
+    <p class="sec">Period</p>
+    <p class="help">Her period only shows against one group's counters and charts. "Skip period days" (on the Now and Charts tabs) leaves those days out of gaps for that group.</p>
+    <select id="cyG" class="merge-sel" aria-label="Group for period tracking"><option value="off" ${db.cycle && db.cycle.g === 'off' ? 'selected' : ''}>Off</option>${db.groups.map(g => `<option value="${g.id}" ${g.id === cycG() ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}</select>
+    ${db.cycles.length ? `<p class="help">${db.cycles.length} logged · <button class="linkbtn" id="cyOpen" style="padding:0;font-size:12.5px">see and edit dates</button></p>` : ''}
 
     <p class="sec">Security &amp; sync</p>
     <p class="help">${esc(document.getElementById('syncLine').textContent)}. Locks itself after a minute in the background.</p>
@@ -1509,6 +1742,7 @@ function settingsSheet(){
         db.sessions.forEach(s => { if(s.g === g.id) s.g = into.id; });
         g.tags.forEach(t => ensureTag(into, t));
         db.counters.forEach(c => { if(c.g === g.id) c.g = into.id; });
+        if(db.cycle && db.cycle.g === g.id) db.cycle.g = into.id;
         into.noAll = !!(into.noAll || g.noAll); into.name = name;
         db.groups = db.groups.filter(x => x !== g);
         if(ui.cg === g.id) ui.cg = into.id; if(ui.lg === g.id) ui.lg = into.id; ui.ctags = [];
@@ -1545,6 +1779,8 @@ function settingsSheet(){
       }
       save(); render(); reopen();
     });
+    sh.querySelector('#cyG').addEventListener('change', ev => { db.cycle = Object.assign({exclude:false}, db.cycle, {g: ev.target.value}); save(); render(); });
+    const cyO = sh.querySelector('#cyOpen'); if(cyO) cyO.addEventListener('click', () => setTimeout(() => cycleSheet(), 0));
     sh.querySelector('#gAdd').addEventListener('click', () => { const n = (prompt('Group name') || '').trim(); if(n){ addGroup(n); save(); render(); reopen(); } });
     // import / export
     sh.querySelector('#kLock').addEventListener('click', lock);
@@ -1562,7 +1798,7 @@ function settingsSheet(){
     sh.querySelector('#sWipe').addEventListener('click', () => {
       if(!confirm(`Delete every group, session and counter${FIREBASE_CONFIG ? ' — here and in the synced copy' : ''}? Export a backup first if you might want it.`)) return;
       if(prompt('Type DELETE to confirm') !== 'DELETE') return;
-      db = {groups:[], sessions:[], counters:[]}; save(); closeSheet(); render(); toast('All data deleted');
+      db = emptyDb(); save(); closeSheet(); render(); toast('All data deleted');
     });
   });
 }
@@ -1665,6 +1901,7 @@ function importJSON(text){
     (x.tags||[]).forEach(t => ensureTag(g, t)); map[x.id] = g.id;
   });
   j.groups.forEach(x => { const list = j.sessions.filter(s => s.g === x.id).map(s => ({t:+s.t, tags:(s.tags||[]).slice(), note:s.note||''})); msgs.push(`${x.name}: ${addSessionsDeduped(map[x.id], list)} sessions`); });
+  if(Array.isArray(j.cycles)){ const have = new Set(db.cycles.map(c => c.from)); let n = 0; j.cycles.forEach(c => { if(c && YMD_RE.test(c.from) && !have.has(c.from)){ db.cycles.push({id:'c'+uid(), from:c.from, to: YMD_RE.test(c.to||'') ? c.to : null}); have.add(c.from); n++; } }); if(n) msgs.push(`Periods: ${n}`); }
   if(!db.counters.length && Array.isArray(j.counters)) j.counters.forEach(c => { const f = fixCounter(c); if(f && map[c.g]) db.counters.push(Object.assign(f, {id:uid(), g:map[c.g]})); });
   return msgs.join(' · ');
 }
@@ -1757,6 +1994,19 @@ view.addEventListener('click', ev => {
   else if(a === 'chipless'){ chipOpen.delete(b.dataset.ck); clampChips(view); }
   else if(a === 'period'){ ui.period = b.dataset.p; saveUI(); later(); }
   else if(a === 'newPeriod') periodSheet();
+  else if(a === 'cycDates') cycleSheet();
+  else if(a === 'cycEx'){ db.cycle = Object.assign({g:null}, db.cycle, {exclude: !(db.cycle && db.cycle.exclude)}); save(); later(); }
+  else if(a === 'cycStart'){
+    const k = ymd(new Date()), t = dayT(k);
+    if(cycSpans().some(p => t >= p.a && t < p.b)){ toast('Today is already inside a logged period'); return; }
+    const c = {id:'c'+uid(), from:k, to:null}; db.cycles.push(c); save(); later();
+    toast('Period started today', 'Undo', () => { db.cycles = db.cycles.filter(x => x !== c); save(); render(); });
+  }
+  else if(a === 'cycEnd'){
+    const st = cycStatus(); if(!st.cur) return;
+    const c = st.cur.c; c.to = ymd(new Date()); save(); later();
+    toast('Marked as ended today', 'Undo', () => { c.to = null; save(); render(); });
+  }
   else if(a === 'resetOrder'){ ui.chartOrder = null; saveUI(); later(); }
   else if(a === 'import') document.getElementById('fileIn').click();
   else if(a === 'newGroup') newGroupPrompt();
